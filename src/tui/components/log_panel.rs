@@ -1,5 +1,7 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
+
+use crate::tui::theme::{self, Palette};
 
 use super::Component;
 
@@ -26,11 +28,8 @@ impl LogPanel {
 
 impl Component for LogPanel {
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .title(" Logs ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-
+        let p = Palette::default();
+        let block = theme::panel_block("Logs", false, &p);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -38,7 +37,7 @@ impl Component for LogPanel {
         let start = self.messages.len().saturating_sub(height);
         let visible: Vec<Line> = self.messages[start..]
             .iter()
-            .map(|m| Line::from(Span::styled(m.as_str(), Style::default().fg(Color::DarkGray))))
+            .map(|m| Line::from(Span::styled(m.as_str(), Style::default().fg(p.text_tertiary))))
             .collect();
 
         frame.render_widget(Paragraph::new(visible), inner);

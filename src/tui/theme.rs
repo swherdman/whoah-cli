@@ -169,7 +169,7 @@ pub fn render_bar(ratio: f64, width: u16, fg: Color, empty_fg: Color) -> Line<'s
 }
 
 /// Create a panel block with focus-aware styling.
-pub fn panel_block(title: &str, focused: bool, p: &Palette) -> Block<'_> {
+pub fn panel_block(title: &str, focused: bool, p: &Palette) -> Block<'static> {
     let border_color = if focused { p.border_focus } else { p.border_default };
     let title_color = if focused { p.text_raised } else { p.text_tertiary };
 
@@ -183,7 +183,7 @@ pub fn panel_block(title: &str, focused: bool, p: &Palette) -> Block<'_> {
 }
 
 /// Create a green-accented panel block (e.g., for recovery view).
-pub fn panel_block_accent(title: &str, p: &Palette) -> Block<'_> {
+pub fn panel_block_accent(title: &str, p: &Palette) -> Block<'static> {
     Block::default()
         .title(format!(" {} ", title.to_uppercase()))
         .borders(Borders::ALL)

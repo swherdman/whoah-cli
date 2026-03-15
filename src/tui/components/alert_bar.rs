@@ -2,6 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::event::Severity;
+use crate::tui::theme::Palette;
 
 use super::Component;
 
@@ -25,17 +26,22 @@ impl AlertBar {
 
 impl Component for AlertBar {
     fn render(&self, frame: &mut Frame, area: Rect) {
+        let p = Palette::default();
+
         let (style, text) = match &self.message {
             Some((Severity::Critical, msg)) => (
-                Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(p.text_bright)
+                    .bg(p.red_error)
+                    .add_modifier(Modifier::BOLD),
                 format!(" !! {msg}"),
             ),
             Some((Severity::Warning, msg)) => (
-                Style::default().fg(Color::Black).bg(Color::Yellow),
+                Style::default().fg(p.text_bright).bg(p.yellow_warn),
                 format!(" ! {msg}"),
             ),
             Some((Severity::Info, msg)) => (
-                Style::default().fg(Color::White),
+                Style::default().fg(p.text_default),
                 format!("   {msg}"),
             ),
             None => return,

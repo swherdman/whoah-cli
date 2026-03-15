@@ -152,12 +152,12 @@ fn classify_zone(name: &str) -> (ZoneKind, String) {
 }
 
 /// Derive zone-to-zpool placement from zone paths.
-/// Only includes Service zones (not instances or infrastructure).
+/// Includes Service and Instance zones (not infrastructure).
 /// Returns: pool_name -> list of service names
 pub fn derive_zone_placement(zones: &[ZoneInfo]) -> HashMap<String, Vec<String>> {
     let mut placement: HashMap<String, Vec<String>> = HashMap::new();
     for zone in zones {
-        if zone.kind != ZoneKind::Service {
+        if zone.kind == ZoneKind::Infrastructure {
             continue;
         }
         if let Some(pool_name) = extract_pool_from_path(&zone.path) {
@@ -170,11 +170,19 @@ pub fn derive_zone_placement(zones: &[ZoneInfo]) -> HashMap<String, Vec<String>>
     placement
 }
 
-/// Extract the oxp_ pool name from a zone path.
+/// Extract the pool identifier from a zone path.
+/// Zone paths use the format: /pool/ext/<UUID>/crypt/zone/...
+/// zpool names are oxp_<UUID>, so we prepend oxp_ to the UUID.
 fn extract_pool_from_path(path: &str) -> Option<String> {
-    for part in path.split('/') {
-        if part.starts_with("oxp_") {
-            return Some(part.to_string());
+    let parts: Vec<&str> = path.split('/').collect();
+    // Look for /pool/ext/<UUID>/crypt pattern
+    for i in 0..parts.len().saturating_sub(1) {
+        if parts[i] == "ext" {
+            let uuid = parts.get(i + 1)?;
+            // Verify it looks like a UUID (contains hyphens, >8 chars)
+            if uuid.len() > 8 && uuid.contains('-') {
+                return Some(format!("oxp_{uuid}"));
+            }
         }
     }
     None
@@ -185,17 +193,19 @@ mod tests {
     use super::*;
 
     // Real-world data from the Helios server
+    // Zone paths use bare UUIDs: /pool/ext/<UUID>/crypt/zone/...
+    // zpool names are oxp_<UUID>
     const REAL_OUTPUT: &str = "\
 0:global:running:/::ipkg:shared
 780:sidecar_softnpu:running:/sidecar/sidecar_softnpu:aaa:omicron1:excl
 781:oxz_switch:running:/zone/oxz_switch:bbb:omicron1:excl
-784:oxz_internal_dns_35486e95:running:/pool/ext/oxp_af5cfbf7/crypt/zone/oxz_internal_dns_35486e95:ccc:omicron1:excl
-786:oxz_cockroachdb_22bb5c45:running:/pool/ext/oxp_7003baec/crypt/zone/oxz_cockroachdb_22bb5c45:ddd:omicron1:excl
-789:oxz_external_dns_7f2ab990:running:/pool/ext/oxp_ae0ac0ee/crypt/zone/oxz_external_dns_7f2ab990:eee:omicron1:excl
-790:oxz_crucible_pantry_dbacdf6a:running:/pool/ext/oxp_7003baec/crypt/zone/oxz_crucible_pantry_dbacdf6a:fff:omicron1:excl
-793:oxz_crucible_66009ec5:running:/pool/ext/oxp_7003baec/crypt/zone/oxz_crucible_66009ec5:ggg:omicron1:excl
-799:oxz_nexus_5eb902a5:running:/pool/ext/oxp_af5cfbf7/crypt/zone/oxz_nexus_5eb902a5:hhh:omicron1:excl
-804:oxz_propolis-server_9be5fc93:running:/pool/ext/oxp_af5cfbf7/crypt/zone/oxz_propolis-server_9be5fc93:iii:omicron1:excl";
+784:oxz_internal_dns_35486e95:running:/pool/ext/af5cfbf7-0f55-4c04/crypt/zone/oxz_internal_dns_35486e95:ccc:omicron1:excl
+786:oxz_cockroachdb_22bb5c45:running:/pool/ext/7003baec-20d6-4267/crypt/zone/oxz_cockroachdb_22bb5c45:ddd:omicron1:excl
+789:oxz_external_dns_7f2ab990:running:/pool/ext/ae0ac0ee-146c-4212/crypt/zone/oxz_external_dns_7f2ab990:eee:omicron1:excl
+790:oxz_crucible_pantry_dbacdf6a:running:/pool/ext/7003baec-20d6-4267/crypt/zone/oxz_crucible_pantry_dbacdf6a:fff:omicron1:excl
+793:oxz_crucible_66009ec5:running:/pool/ext/7003baec-20d6-4267/crypt/zone/oxz_crucible_66009ec5:ggg:omicron1:excl
+799:oxz_nexus_5eb902a5:running:/pool/ext/af5cfbf7-0f55-4c04/crypt/zone/oxz_nexus_5eb902a5:hhh:omicron1:excl
+804:oxz_propolis-server_9be5fc93:running:/pool/ext/af5cfbf7-0f55-4c04/crypt/zone/oxz_propolis-server_9be5fc93:iii:omicron1:excl";
 
     #[test]
     fn test_classify_infrastructure() {
@@ -258,21 +268,24 @@ mod tests {
     }
 
     #[test]
-    fn test_placement_excludes_non_services() {
+    fn test_placement_includes_services_and_instances() {
         let zones = parse_zoneadm_list(REAL_OUTPUT).unwrap();
         let placement = derive_zone_placement(&zones);
 
-        // propolis-server and infra zones should not appear in placement
+        // infra zones should not appear in placement
         for (_pool, names) in &placement {
-            assert!(!names.contains(&"propolis-server".to_string()));
             assert!(!names.contains(&"sidecar_softnpu".to_string()));
             assert!(!names.contains(&"switch".to_string()));
         }
 
-        // crucible_pantry should appear correctly (not truncated to "crucible")
         let all_names: Vec<_> = placement.values().flatten().collect();
+
+        // Services should appear
         assert!(all_names.contains(&&"crucible_pantry".to_string()));
         assert!(all_names.contains(&&"crucible".to_string()));
+
+        // Instances should also appear in placement
+        assert!(all_names.contains(&&"propolis-server".to_string()));
     }
 
     #[test]

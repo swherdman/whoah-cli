@@ -1,10 +1,11 @@
 use std::time::{Duration, Instant};
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::action::Action;
 use crate::ops::recover::{RecoveryEvent, RecoveryStep};
+use crate::tui::theme::{self, Palette};
 
 use super::Component;
 
@@ -31,7 +32,7 @@ pub struct RecoveryView {
     zone_progress: Option<(u32, u32)>,
     start_time: Option<Instant>,
     total_elapsed: Option<Duration>,
-    error: Option<(String, Option<String>)>, // (error, workaround hint)
+    error: Option<(String, Option<String>)>,
 }
 
 impl RecoveryView {
@@ -90,13 +91,11 @@ impl RecoveryView {
             }
             RecoveryEvent::StepOutput(line) => {
                 self.output_lines.push(line.clone());
-                // Auto-scroll to bottom
                 let total = self.output_lines.len() as u16;
                 self.output_scroll = total.saturating_sub(1);
             }
             RecoveryEvent::ZoneProgress { running, expected } => {
                 self.zone_progress = Some((*running, *expected));
-                // Update output with zone progress
                 let line = format!("Zones: {running}/{expected} running");
                 if let Some(last) = self.output_lines.last() {
                     if last.starts_with("Zones: ") {
@@ -135,7 +134,6 @@ impl RecoveryView {
                 remaining += info.step.estimated_duration();
             }
             if info.state == StepState::Running {
-                // Estimate remaining as half the expected duration
                 let expected = info.step.estimated_duration();
                 let elapsed = info.elapsed.unwrap_or(Duration::ZERO);
                 if elapsed < expected {
@@ -147,7 +145,10 @@ impl RecoveryView {
     }
 
     fn completed_count(&self) -> usize {
-        self.steps.iter().filter(|s| s.state == StepState::Completed).count()
+        self.steps
+            .iter()
+            .filter(|s| s.state == StepState::Completed)
+            .count()
     }
 }
 
@@ -168,21 +169,18 @@ impl Component for RecoveryView {
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .title(" Recovery ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow));
-
+        let p = Palette::default();
+        let block = theme::panel_block_accent("Recovery", &p);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // Layout: progress bar (2) | step list (9) | output pane (rest)
+        // Layout: progress (2) | steps (9) | output (rest)
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),   // progress bar + ETA
-                Constraint::Length(9),   // step list (7 steps + header + spacer)
-                Constraint::Min(3),      // output pane
+                Constraint::Length(2),
+                Constraint::Length(9),
+                Constraint::Min(3),
             ])
             .split(inner);
 
@@ -199,17 +197,22 @@ impl Component for RecoveryView {
         let eta_text = if let Some(dur) = self.total_elapsed {
             format!("Complete in {:.0}s", dur.as_secs_f64())
         } else if remaining.as_secs() > 0 {
-            format!("Step {}/{}  ~{}s remaining", completed + 1, total, remaining.as_secs())
+            format!(
+                "Step {}/{}  ~{}s remaining",
+                completed + 1,
+                total,
+                remaining.as_secs()
+            )
         } else {
             format!("Step {}/{}", completed + 1, total)
         };
 
-        let gauge_color = if self.error.is_some() {
-            Color::Red
+        let bar_color = if self.error.is_some() {
+            p.red_error
         } else if self.total_elapsed.is_some() {
-            Color::Green
+            p.green_primary
         } else {
-            Color::Yellow
+            p.yellow_warn
         };
 
         let progress_area = Layout::default()
@@ -218,24 +221,33 @@ impl Component for RecoveryView {
             .split(chunks[0]);
 
         frame.render_widget(
-            Paragraph::new(eta_text).style(Style::default().fg(gauge_color)),
+            Paragraph::new(eta_text).style(Style::default().fg(bar_color)),
             progress_area[0],
         );
-        frame.render_widget(
-            Gauge::default()
-                .ratio(ratio)
-                .gauge_style(Style::default().fg(gauge_color).bg(Color::DarkGray)),
-            progress_area[1],
-        );
+        let bar = theme::render_bar(ratio, progress_area[1].width, bar_color, p.ascii_structural);
+        frame.render_widget(Paragraph::new(vec![bar]), progress_area[1]);
 
         // --- Step list ---
         let mut step_lines: Vec<Line> = Vec::new();
         for info in &self.steps {
             let (icon, style) = match info.state {
-                StepState::Pending => ("  ", Style::default().fg(Color::DarkGray)),
-                StepState::Running => (">>", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                StepState::Completed => ("OK", Style::default().fg(Color::Green)),
-                StepState::Failed => ("!!", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                StepState::Pending => (
+                    "  ",
+                    Style::default().fg(p.text_disabled),
+                ),
+                StepState::Running => (
+                    ">>",
+                    Style::default()
+                        .fg(p.yellow_warn)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                StepState::Completed => ("OK", Style::default().fg(p.green_primary)),
+                StepState::Failed => (
+                    "!!",
+                    Style::default()
+                        .fg(p.red_error)
+                        .add_modifier(Modifier::BOLD),
+                ),
             };
 
             let time_str = match (info.state, info.elapsed) {
@@ -248,7 +260,9 @@ impl Component for RecoveryView {
                         String::new()
                     }
                 }
-                (StepState::Pending, _) => format!(" [~{}s]", info.step.estimated_duration().as_secs()),
+                (StepState::Pending, _) => {
+                    format!(" [~{}s]", info.step.estimated_duration().as_secs())
+                }
                 (StepState::Failed, _) => " FAILED".to_string(),
             };
 
@@ -258,7 +272,7 @@ impl Component for RecoveryView {
                     format!("Step {}: {}", info.step.index() + 1, info.step.label()),
                     style,
                 ),
-                Span::styled(time_str, Style::default().fg(Color::DarkGray)),
+                Span::styled(time_str, Style::default().fg(p.text_tertiary)),
             ]));
         }
 
@@ -266,9 +280,10 @@ impl Component for RecoveryView {
 
         // --- Output pane ---
         let output_block = Block::default()
-            .title(" Output ")
+            .title(format!(" {} ", "OUTPUT".to_uppercase()))
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(p.border_default))
+            .title_style(Style::default().fg(p.text_tertiary));
 
         let output_inner = output_block.inner(chunks[2]);
         frame.render_widget(output_block, chunks[2]);
@@ -281,34 +296,31 @@ impl Component for RecoveryView {
 
         let visible: Vec<Line> = self.output_lines[start..end]
             .iter()
-            .map(|l| Line::from(Span::raw(l.as_str())))
+            .map(|l| Line::from(Span::styled(l.as_str(), Style::default().fg(p.text_secondary))))
             .collect();
 
         frame.render_widget(Paragraph::new(visible), output_inner);
 
         // Error display
         if let Some((error, workaround)) = &self.error {
-            // Render error at bottom of output
             let error_area = Rect {
                 y: output_inner.y + output_inner.height.saturating_sub(3),
                 height: 3.min(output_inner.height),
                 ..output_inner
             };
-            let mut error_lines = vec![
-                Line::from(Span::styled(
-                    format!("Error: {error}"),
-                    Style::default().fg(Color::Red),
-                )),
-            ];
+            let mut error_lines = vec![Line::from(Span::styled(
+                format!("Error: {error}"),
+                Style::default().fg(p.red_error),
+            ))];
             if let Some(hint) = workaround {
                 error_lines.push(Line::from(Span::styled(
                     format!("Hint: {hint}"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(p.yellow_warn),
                 )));
             }
             error_lines.push(Line::from(Span::styled(
                 "[Esc] back to dashboard",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(p.text_disabled),
             )));
             frame.render_widget(Paragraph::new(error_lines), error_area);
         }

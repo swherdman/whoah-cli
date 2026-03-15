@@ -1,5 +1,6 @@
 pub mod components;
 pub mod layout;
+pub mod theme;
 
 use std::io::{self, Stdout};
 use std::time::Duration;

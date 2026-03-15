@@ -21,6 +21,7 @@ use crate::tui::components::status_bar::StatusBarComponent;
 use crate::tui::components::status_panel::StatusPanel;
 use crate::tui::components::Component;
 use crate::tui::layout::dashboard_layout;
+use crate::tui::theme::Palette;
 use crate::tui::Tui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -412,7 +413,19 @@ impl App {
         });
     }
 
-    fn render(&self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame) {
+        let p = Palette::default();
+
+        // Fill entire frame with base background
+        frame.render_widget(
+            ratatui::widgets::Block::default().style(Style::default().bg(p.bg_base)),
+            frame.area(),
+        );
+
+        // Update focus state on panels
+        self.status_panel.set_focused(self.focused == FocusedPanel::Status);
+        self.disk_panel.set_focused(self.focused == FocusedPanel::Disk);
+
         match self.mode {
             AppMode::Dashboard => self.render_dashboard(frame),
             AppMode::Recovery => self.render_recovery(frame),
@@ -443,7 +456,6 @@ impl App {
     fn render_recovery(&self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Title bar | recovery view | keybindings
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
