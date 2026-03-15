@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config;
 use crate::ops::recover::{
-    apply_workaround, run_recovery, RecoveryEvent, RecoveryParams, RecoveryStep, Workaround,
+    run_recovery, RecoveryEvent, RecoveryParams, RecoveryStep,
 };
 use crate::ops::status::{gather_status, is_post_reboot};
 use crate::ssh::session::SshHost;

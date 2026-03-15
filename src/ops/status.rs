@@ -447,6 +447,7 @@ mod tests {
                         last: "192.168.2.90".to_string(),
                     },
                 },
+                nexus: NexusConfig::default(),
             },
             build: BuildToml::default(),
             monitoring: MonitoringToml::default(),

@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 
 use crate::action::Action;
 use crate::ops::recover::{RecoveryEvent, RecoveryStep};
@@ -196,8 +196,7 @@ impl Component for RecoveryView {
         };
 
         let remaining = self.estimated_remaining();
-        let eta_text = if self.total_elapsed.is_some() {
-            let dur = self.total_elapsed.unwrap();
+        let eta_text = if let Some(dur) = self.total_elapsed {
             format!("Complete in {:.0}s", dur.as_secs_f64())
         } else if remaining.as_secs() > 0 {
             format!("Step {}/{}  ~{}s remaining", completed + 1, total, remaining.as_secs())

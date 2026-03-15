@@ -219,6 +219,7 @@ async fn run_wizard() -> Result<()> {
                     last: pool_last,
                 },
             },
+            nexus: NexusConfig::default(),
         },
         build: BuildToml {
             omicron: OmicronBuildConfig {
@@ -272,6 +273,7 @@ fn build_config_from_discovered(
                 h
             },
             network: discovered.network.clone(),
+            nexus: NexusConfig::default(),
         },
         build: BuildToml {
             omicron: OmicronBuildConfig {

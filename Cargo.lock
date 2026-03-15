@@ -2102,6 +2102,7 @@ dependencies = [
  "predicates",
  "ratatui 0.29.0",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-util",

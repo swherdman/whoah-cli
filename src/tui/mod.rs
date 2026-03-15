@@ -8,7 +8,7 @@ use color_eyre::Result;
 use futures::StreamExt;
 use crossterm::event::EventStream;
 use ratatui::crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event as CtEvent,
+    DisableMouseCapture, EnableMouseCapture,
 };
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,

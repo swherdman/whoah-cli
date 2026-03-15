@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::DeploymentConfig;
-use crate::parse::{network, services, zones};
+use crate::parse::{network, zones};
 use crate::ssh::RemoteHost;
 
 // --- Recovery Steps ---
@@ -638,8 +638,19 @@ mod tests {
                         last: "192.168.2.90".to_string(),
                     },
                 },
+                nexus: NexusConfig::default(),
             },
-            build: BuildToml::default(),
+            build: BuildToml {
+                omicron: OmicronBuildConfig {
+                    overrides: OmicronOverrides {
+                        cockroachdb_redundancy: Some(3),
+                        vdev_count: Some(3),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             monitoring: MonitoringToml::default(),
         }
     }
@@ -652,7 +663,8 @@ mod tests {
         assert_eq!(params.pxa_start, "192.168.2.70");
         assert_eq!(params.pxa_end, "192.168.2.90");
         assert_eq!(params.vdev_size_bytes, 42949672960);
-        assert_eq!(params.expected_service_total, 0); // empty expected_services in default config
+        // crdb=3, vdevs=3, plus fixed services (int_dns=3, ext_dns=2, nexus=3, clickhouse=1, pantry=3, oximeter=1, ntp=1, softnpu=1, switch=1) = 22
+        assert_eq!(params.expected_service_total, 22);
     }
 
     #[test]

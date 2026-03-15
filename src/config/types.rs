@@ -25,6 +25,8 @@ pub struct DeploymentToml {
     pub deployment: DeploymentMeta,
     pub hosts: HashMap<String, HostConfig>,
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub nexus: NexusConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +69,74 @@ pub struct NetworkConfig {
 pub struct IpRange {
     pub first: String,
     pub last: String,
+}
+
+// --- Nexus API config ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NexusConfig {
+    #[serde(default = "default_silo_name")]
+    pub silo_name: String,
+    #[serde(default = "default_silo_user")]
+    pub username: String,
+    #[serde(default = "default_silo_password")]
+    pub password: String,
+    #[serde(default = "default_pool_name")]
+    pub ip_pool_name: String,
+    #[serde(default)]
+    pub quotas: QuotaConfig,
+}
+
+fn default_silo_name() -> String {
+    "recovery".to_string()
+}
+fn default_silo_user() -> String {
+    "recovery".to_string()
+}
+fn default_silo_password() -> String {
+    "oxide".to_string()
+}
+fn default_pool_name() -> String {
+    "default".to_string()
+}
+
+impl Default for NexusConfig {
+    fn default() -> Self {
+        Self {
+            silo_name: default_silo_name(),
+            username: default_silo_user(),
+            password: default_silo_password(),
+            ip_pool_name: default_pool_name(),
+            quotas: QuotaConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotaConfig {
+    #[serde(default = "default_quota_cpus")]
+    pub cpus: u64,
+    #[serde(default = "default_quota_large")]
+    pub memory: u64,
+    #[serde(default = "default_quota_large")]
+    pub storage: u64,
+}
+
+fn default_quota_cpus() -> u64 {
+    9999999999
+}
+fn default_quota_large() -> u64 {
+    999999999999999999
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            cpus: default_quota_cpus(),
+            memory: default_quota_large(),
+            storage: default_quota_large(),
+        }
+    }
 }
 
 // --- build.toml ---

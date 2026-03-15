@@ -10,7 +10,7 @@ use crate::action::Action;
 use crate::config::DeploymentConfig;
 use crate::event::{AppEvent, Event, Severity};
 use crate::ops::recover::{run_recovery, RecoveryEvent, RecoveryParams};
-use crate::ops::status::{gather_status, is_post_reboot, HostStatus};
+use crate::ops::status::gather_status;
 use crate::ssh::session::SshHost;
 use crate::ssh::RemoteHost;
 use crate::tui::components::alert_bar::AlertBar;
