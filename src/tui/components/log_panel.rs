@@ -1,0 +1,46 @@
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Paragraph};
+
+use super::Component;
+
+pub struct LogPanel {
+    messages: Vec<String>,
+    max_messages: usize,
+}
+
+impl LogPanel {
+    pub fn new() -> Self {
+        Self {
+            messages: Vec::new(),
+            max_messages: 200,
+        }
+    }
+
+    pub fn push(&mut self, message: String) {
+        self.messages.push(message);
+        if self.messages.len() > self.max_messages {
+            self.messages.remove(0);
+        }
+    }
+}
+
+impl Component for LogPanel {
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        let block = Block::default()
+            .title(" Logs ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let height = inner.height as usize;
+        let start = self.messages.len().saturating_sub(height);
+        let visible: Vec<Line> = self.messages[start..]
+            .iter()
+            .map(|m| Line::from(Span::styled(m.as_str(), Style::default().fg(Color::DarkGray))))
+            .collect();
+
+        frame.render_widget(Paragraph::new(visible), inner);
+    }
+}

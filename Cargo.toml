@@ -1,0 +1,54 @@
+[package]
+name = "whoah-cli"
+version = "0.1.0"
+edition = "2021"
+description = "TUI/CLI tool for managing Oxide-at-home deployments"
+license = "MIT"
+
+[[bin]]
+name = "whoah"
+path = "src/main.rs"
+
+[dependencies]
+# TUI
+ratatui = { version = "0.29", features = ["all-widgets"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+tui-logger = { version = "0.13", features = ["tracing-support"] }
+ansi-to-tui = "6"
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "process"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+dialoguer = "0.11"
+
+# SSH
+openssh = { version = "0.11", features = ["process-mux", "native-mux"] }
+
+# Config
+toml = "0.8"
+toml_edit = "0.22"
+serde = { version = "1", features = ["derive"] }
+
+# Error handling & logging
+log = "0.4"
+color-eyre = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+human-panic = "2"
+
+# Async traits
+async-trait = "0.1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+insta = { version = "1", features = ["toml", "yaml"] }
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
