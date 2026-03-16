@@ -5,18 +5,17 @@ pub struct DashboardAreas {
     pub left_panel: Rect,
     pub right_panel: Rect,
     pub log_panel: Rect,
-    pub keybindings_bar: Rect,
 }
 
 pub fn dashboard_layout(area: Rect) -> DashboardAreas {
-    // Vertical: title(1) | main content | logs | keybindings(1)
+    // Vertical: status info(1) | main content | logs
+    // Tab bar and keybindings are rendered by the outer screen chrome.
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),       // title bar (host info + alerts)
-            Constraint::Min(8),          // main content (services + disk)
-            Constraint::Length(8),       // log panel
-            Constraint::Length(1),       // keybindings bar
+            Constraint::Length(1), // status info (host + alerts)
+            Constraint::Min(8),   // main content (services + disk)
+            Constraint::Length(8), // log panel
         ])
         .split(area);
 
@@ -34,6 +33,5 @@ pub fn dashboard_layout(area: Rect) -> DashboardAreas {
         left_panel: horizontal[0],
         right_panel: horizontal[1],
         log_panel: vertical[2],
-        keybindings_bar: vertical[3],
     }
 }

@@ -1,4 +1,10 @@
+pub mod deploy;
 pub mod import;
 pub mod nexus;
+pub mod pipeline;
+pub mod pkg_cache;
+pub mod proxmox;
 pub mod recover;
+pub mod serial;
+pub mod ssh_log;
 pub mod status;

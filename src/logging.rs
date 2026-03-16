@@ -18,9 +18,9 @@ pub fn init(verbose: u8) -> Result<()> {
 
     let env_filter = EnvFilter::try_from_env("WHOAH_LOG").unwrap_or_else(|_| {
         match verbose {
-            0 => EnvFilter::new("whoah_cli=info"),
-            1 => EnvFilter::new("whoah_cli=debug"),
-            _ => EnvFilter::new("whoah_cli=trace"),
+            0 => EnvFilter::new("whoah=info,whoah_cli=info"),
+            1 => EnvFilter::new("whoah=debug,whoah_cli=debug"),
+            _ => EnvFilter::new("whoah=trace,whoah_cli=trace"),
         }
     });
 

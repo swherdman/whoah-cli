@@ -448,6 +448,7 @@ mod tests {
                     },
                 },
                 nexus: NexusConfig::default(),
+                proxmox: None,
             },
             build: BuildToml::default(),
             monitoring: MonitoringToml::default(),

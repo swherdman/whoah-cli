@@ -220,6 +220,7 @@ async fn run_wizard() -> Result<()> {
                 },
             },
             nexus: NexusConfig::default(),
+            proxmox: None,
         },
         build: BuildToml {
             omicron: OmicronBuildConfig {
@@ -274,6 +275,7 @@ fn build_config_from_discovered(
             },
             network: discovered.network.clone(),
             nexus: NexusConfig::default(),
+            proxmox: None,
         },
         build: BuildToml {
             omicron: OmicronBuildConfig {

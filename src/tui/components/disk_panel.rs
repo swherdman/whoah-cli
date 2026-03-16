@@ -11,15 +11,17 @@ use super::Component;
 pub struct DiskPanel {
     status: Option<HostStatus>,
     thresholds: Thresholds,
+    vdev_size_bytes: u64,
     scroll: u16,
     focused: bool,
 }
 
 impl DiskPanel {
-    pub fn new(thresholds: Thresholds) -> Self {
+    pub fn new(thresholds: Thresholds, vdev_size_bytes: u64) -> Self {
         Self {
             status: None,
             thresholds,
+            vdev_size_bytes,
             scroll: 0,
             focused: false,
         }
@@ -120,25 +122,69 @@ impl Component for DiskPanel {
             ));
         }
 
-        // Spacer
-        if !status.disk.vdev_files.is_empty() {
+        // Vdev files — split by type (U.2 data drives vs M.2 boot drives)
+        let u2_vdevs: Vec<_> = status.disk.vdev_files.iter()
+            .filter(|v| v.path.contains("u2_"))
+            .collect();
+        let m2_vdevs: Vec<_> = status.disk.vdev_files.iter()
+            .filter(|v| v.path.contains("m2_"))
+            .collect();
+
+        let logical_gib = self.vdev_size_bytes as f64 / 1_073_741_824.0;
+
+        if !u2_vdevs.is_empty() {
             lines.push(Line::from(""));
-            lines.push(theme::section_header("Vdevs", &p));
+            lines.push(theme::section_header("U.2 Data Drives", &p));
+            for vdev in &u2_vdevs {
+                let name = vdev.path.rsplit('/').next().unwrap_or(&vdev.path);
+                let gib = vdev.size_bytes as f64 / 1_073_741_824.0;
+                let pct = if self.vdev_size_bytes > 0 {
+                    (gib / logical_gib * 100.0) as u8
+                } else {
+                    0
+                };
+                let color = theme::threshold_color(
+                    pct,
+                    ((self.thresholds.vdev_warning_gib as f64 / logical_gib) * 100.0) as u8,
+                    95,
+                    &p,
+                );
+                lines.push(Line::from(Span::styled(
+                    format!("{name}: {gib:.1} / {logical_gib:.0} GiB ({pct}%)"),
+                    Style::default().fg(color),
+                )));
+                lines.push(theme::render_bar(
+                    gib / logical_gib,
+                    bar_width,
+                    color,
+                    p.ascii_structural,
+                ));
+            }
         }
 
-        // Vdev files
-        for vdev in &status.disk.vdev_files {
-            let name = vdev.path.rsplit('/').next().unwrap_or(&vdev.path);
-            let gib = vdev.size_bytes as f64 / 1_073_741_824.0;
-            let color = if gib > self.thresholds.vdev_warning_gib as f64 {
-                p.red_error
-            } else {
-                p.text_default
-            };
-            lines.push(Line::from(Span::styled(
-                format!("{name}: {gib:.1} GiB"),
-                Style::default().fg(color),
-            )));
+        if !m2_vdevs.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(theme::section_header("M.2 Boot Drives", &p));
+            for vdev in &m2_vdevs {
+                let name = vdev.path.rsplit('/').next().unwrap_or(&vdev.path);
+                let gib = vdev.size_bytes as f64 / 1_073_741_824.0;
+                let pct = if self.vdev_size_bytes > 0 {
+                    (gib / logical_gib * 100.0) as u8
+                } else {
+                    0
+                };
+                let color = theme::threshold_color(pct, 50, 80, &p);
+                lines.push(Line::from(Span::styled(
+                    format!("{name}: {gib:.1} / {logical_gib:.0} GiB ({pct}%)"),
+                    Style::default().fg(color),
+                )));
+                lines.push(theme::render_bar(
+                    gib / logical_gib,
+                    bar_width,
+                    color,
+                    p.ascii_structural,
+                ));
+            }
         }
 
         let paragraph = Paragraph::new(lines).scroll((self.scroll, 0));

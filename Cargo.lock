@@ -2097,6 +2097,7 @@ dependencies = [
  "futures",
  "human-panic",
  "insta",
+ "libc",
  "log",
  "openssh",
  "predicates",

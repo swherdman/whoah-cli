@@ -105,10 +105,15 @@ pub fn resolve_deployment(explicit: Option<&str>) -> Result<String> {
             "No deployments found. Run 'whoah init' to create one."
         )),
         1 => Ok(deployments.into_iter().next().unwrap()),
-        _ => Err(eyre!(
-            "Multiple deployments found: {}. Use --deployment <name> to select one.",
-            deployments.join(", ")
-        )),
+        _ => {
+            let selection = dialoguer::Select::new()
+                .with_prompt("Multiple deployments found. Select one")
+                .items(&deployments)
+                .default(0)
+                .interact()
+                .map_err(|e| eyre!("Failed to select deployment: {e}"))?;
+            Ok(deployments[selection].clone())
+        }
     }
 }
 

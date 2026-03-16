@@ -5,6 +5,10 @@ edition = "2021"
 description = "TUI/CLI tool for managing Oxide-at-home deployments"
 license = "MIT"
 
+[lib]
+name = "whoah"
+path = "src/lib.rs"
+
 [[bin]]
 name = "whoah"
 path = "src/main.rs"
@@ -17,7 +21,7 @@ tui-logger = { version = "0.13", features = ["tracing-support"] }
 ansi-to-tui = "6"
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "process", "fs"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 
@@ -27,6 +31,9 @@ dialoguer = "0.11"
 
 # SSH
 openssh = { version = "0.11", features = ["process-mux", "native-mux"] }
+
+# System
+libc = "0.2"
 
 # Config
 toml = "0.8"

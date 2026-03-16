@@ -27,6 +27,8 @@ pub struct DeploymentToml {
     pub network: NetworkConfig,
     #[serde(default)]
     pub nexus: NexusConfig,
+    #[serde(default)]
+    pub proxmox: Option<ProxmoxConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +137,119 @@ impl Default for QuotaConfig {
             cpus: default_quota_cpus(),
             memory: default_quota_large(),
             storage: default_quota_large(),
+        }
+    }
+}
+
+// --- Proxmox provisioning ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxmoxConfig {
+    pub host: String,
+    #[serde(default = "default_proxmox_ssh_user")]
+    pub ssh_user: String,
+    #[serde(default = "default_proxmox_node")]
+    pub node: String,
+    #[serde(default = "default_iso_storage")]
+    pub iso_storage: String,
+    #[serde(default = "default_disk_storage")]
+    pub disk_storage: String,
+    #[serde(default = "default_iso_file")]
+    pub iso_file: String,
+    #[serde(default)]
+    pub vm: ProxmoxVmConfig,
+}
+
+fn default_proxmox_ssh_user() -> String {
+    "root".to_string()
+}
+fn default_proxmox_node() -> String {
+    "PVE".to_string()
+}
+fn default_iso_storage() -> String {
+    "local".to_string()
+}
+fn default_disk_storage() -> String {
+    "local-lvm".to_string()
+}
+fn default_iso_file() -> String {
+    "helios-install-vga.iso".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxmoxVmConfig {
+    #[serde(default = "default_vmid")]
+    pub vmid: u32,
+    #[serde(default = "default_vm_name")]
+    pub name: String,
+    #[serde(default = "default_cores")]
+    pub cores: u32,
+    #[serde(default = "default_sockets")]
+    pub sockets: u32,
+    #[serde(default = "default_memory_mb")]
+    pub memory_mb: u32,
+    #[serde(default = "default_disk_gb")]
+    pub disk_gb: u32,
+    #[serde(default = "default_disk_bus")]
+    pub disk_bus: String,
+    #[serde(default = "default_cpu_type")]
+    pub cpu_type: String,
+    #[serde(default = "default_os_type")]
+    pub os_type: String,
+    #[serde(default = "default_net_model")]
+    pub net_model: String,
+    #[serde(default = "default_net_bridge")]
+    pub net_bridge: String,
+}
+
+fn default_vmid() -> u32 {
+    302
+}
+fn default_vm_name() -> String {
+    "helios02".to_string()
+}
+fn default_cores() -> u32 {
+    2
+}
+fn default_sockets() -> u32 {
+    2
+}
+fn default_memory_mb() -> u32 {
+    49152
+}
+fn default_disk_gb() -> u32 {
+    256
+}
+fn default_disk_bus() -> String {
+    "sata".to_string()
+}
+fn default_cpu_type() -> String {
+    "host".to_string()
+}
+fn default_os_type() -> String {
+    "solaris".to_string()
+}
+fn default_net_model() -> String {
+    "e1000e".to_string()
+}
+fn default_net_bridge() -> String {
+    "vmbr0".to_string()
+}
+
+impl Default for ProxmoxVmConfig {
+    fn default() -> Self {
+        Self {
+            vmid: default_vmid(),
+            name: default_vm_name(),
+            cores: default_cores(),
+            sockets: default_sockets(),
+            memory_mb: default_memory_mb(),
+            disk_gb: default_disk_gb(),
+            disk_bus: default_disk_bus(),
+            cpu_type: default_cpu_type(),
+            os_type: default_os_type(),
+            net_model: default_net_model(),
+            net_bridge: default_net_bridge(),
         }
     }
 }

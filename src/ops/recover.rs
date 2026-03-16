@@ -639,6 +639,7 @@ mod tests {
                     },
                 },
                 nexus: NexusConfig::default(),
+                proxmox: None,
             },
             build: BuildToml {
                 omicron: OmicronBuildConfig {

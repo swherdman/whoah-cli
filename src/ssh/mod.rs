@@ -1,4 +1,6 @@
+pub mod direct;
 pub mod mock;
+pub mod registry;
 pub mod session;
 
 use async_trait::async_trait;

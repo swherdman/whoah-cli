@@ -19,8 +19,18 @@ pub enum AppEvent {
     StatusUpdated(Box<HostStatus>),
     /// Recovery progress
     Recovery(RecoveryEvent),
+    /// Build pipeline progress
+    Build(BuildEvent),
     /// Alert
     Alert { severity: Severity, message: String },
+}
+
+#[derive(Debug, Clone)]
+pub enum BuildEvent {
+    StepStarted(String),
+    StepDetail(String, String),
+    StepCompleted(String),
+    StepFailed(String, String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
