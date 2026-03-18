@@ -252,28 +252,19 @@ pub fn build_deploy_pipeline() -> Pipeline {
                     Step::new("build-swap", "Configure swap"),
                     Step::new("build-clone", "Clone omicron"),
                     Step::new("build-prereq-builder", "Install builder prerequisites"),
-                    Step::new("build-prereq-runner", "Install runner prerequisites"),
-                    Step::new("build-fix-perms", "Fix file ownership"),
                     Step::new("build-config-network", "Configure network IPs"),
                     Step::new("build-config-source", "Apply source overrides"),
                     Step::new("build-config-vdevs", "Configure vdev count"),
+                    Step::new("build-prereq-builder", "Install builder prerequisites"),
+                    Step::new("build-prereq-runner", "Install runner prerequisites"),
+                    Step::new("build-fix-perms", "Fix file ownership"),
                     Step::new("build-compile", "Build omicron-package"),
+                    Step::new("build-patch-propolis", "Patch propolis binary"),
                     Step::new("build-vhw", "Create virtual hardware"),
                     Step::new("build-install", "Install + wait for zones"),
                     Step::new("build-verify", "Verify DNS + API"),
                     Step::new("build-quotas", "Set silo quotas"),
                     Step::new("build-ippool", "Create IP pool"),
-                ],
-            ),
-            Phase::new(
-                "Patches",
-                vec![
-                    Step::new("patch-clone", "Clone propolis"),
-                    Step::new("patch-apply", "Apply patch files"),
-                    Step::new("patch-build", "Build propolis-server"),
-                    Step::new("patch-repack", "Repack tarball"),
-                    Step::new("patch-redeploy", "Uninstall + reinstall"),
-                    Step::new("patch-verify", "Verify zones"),
                 ],
             ),
         ],
@@ -287,15 +278,13 @@ mod tests {
     #[test]
     fn test_pipeline_structure() {
         let p = build_deploy_pipeline();
-        assert_eq!(p.phases.len(), 4);
+        assert_eq!(p.phases.len(), 3);
         assert_eq!(p.phases[0].name, "Provision VM");
         assert_eq!(p.phases[1].name, "Configure Access");
         assert_eq!(p.phases[2].name, "Build & Deploy");
-        assert_eq!(p.phases[3].name, "Patches");
-
         let (done, total) = p.progress();
         assert_eq!(done, 0);
-        assert_eq!(total, 32);
+        assert_eq!(total, 28);
     }
 
     #[test]
@@ -347,7 +336,7 @@ mod tests {
         let p = build_deploy_pipeline();
         assert_eq!(p.find_step("prov-create"), Some((0, 0)));
         assert_eq!(p.find_step("access-verify"), Some((1, 1)));
-        assert_eq!(p.find_step("patch-verify"), Some((3, 5)));
+        assert_eq!(p.find_step("build-patch-propolis"), Some((2, 15)));
         assert_eq!(p.find_step("nonexistent"), None);
     }
 

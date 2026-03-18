@@ -924,70 +924,20 @@ async fn run_omicron_build(
     send(tx, BuildEvent::StepStarted("build-clone".into()));
     ssh.detail("Cloning omicron repository...").await;
 
-    // Check if already cloned
     let check = ssh.run(&format!("test -d {repo_path}/.git && echo exists")).await?;
     if check.stdout.trim() == "exists" {
         ssh.detail("Omicron repo already exists, pulling latest...").await;
         let _ = ssh.run(&format!("cd {repo_path} && git fetch")).await;
     } else {
-        // Don't proxy git clone — git doesn't trust our self-signed CA,
-        // and the clone doesn't benefit from caching anyway
+        // Don't proxy git clone — git doesn't trust our self-signed CA
         ssh.run_streaming_check(&format!(
             "git clone https://github.com/oxidecomputer/omicron.git {repo_path} 2>&1"
         )).await?;
     }
 
-    // Checkout specific ref if configured
-    if let Some(ref git_ref) = config.build.omicron.rust_toolchain {
-        // git_ref is actually rust_toolchain — we use the repo as-is (HEAD)
-        // TODO: add git_ref field to OmicronBuildConfig for pinning
-    }
-
     send(tx, BuildEvent::StepCompleted("build-clone".into()));
 
-    // --- Step: Install builder prerequisites ---
-    send(tx, BuildEvent::StepStarted("build-prereq-builder".into()));
-    ssh.set_step("build-prereq-builder");
-    ssh.detail("Installing builder prerequisites...").await;
-
-    ssh.run_streaming_check(&format!(
-        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
-         pfexec env PATH=$PATH ./tools/install_builder_prerequisites.sh -y' 2>&1"
-    )).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-prereq-builder".into(), e.to_string()));
-        e
-    })?;
-
-    send(tx, BuildEvent::StepCompleted("build-prereq-builder".into()));
-
-    // --- Step: Install runner prerequisites ---
-    send(tx, BuildEvent::StepStarted("build-prereq-runner".into()));
-    ssh.set_step("build-prereq-runner");
-    ssh.detail("Installing runner prerequisites...").await;
-
-    ssh.run_streaming_check(&format!(
-        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
-         pfexec env PATH=$PATH ./tools/install_runner_prerequisites.sh -y' 2>&1"
-    )).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-prereq-runner".into(), e.to_string()));
-        e
-    })?;
-
-    send(tx, BuildEvent::StepCompleted("build-prereq-runner".into()));
-
-    // --- Step: Fix file ownership ---
-    send(tx, BuildEvent::StepStarted("build-fix-perms".into()));
-    ssh.set_step("build-fix-perms");
-    ssh.detail("Fixing file ownership...").await;
-
-    // The prerequisite scripts run as root and create root-owned files
-    ssh.run_check(&format!(
-        "pfexec chown -R {ssh_user}:staff ~/.cargo ~/.rustup {repo_path}/target {repo_path}/out 2>/dev/null || true"
-    )).await?;
-
-    send(tx, BuildEvent::StepCompleted("build-fix-perms".into()));
-
-    // --- Step: Configure network IPs ---
+    // --- Step: Configure network IPs (early — before packaging bakes configs) ---
     send(tx, BuildEvent::StepStarted("build-config-network".into()));
     ssh.set_step("build-config-network");
     ssh.detail("Configuring network IPs in config-rss.toml...").await;
@@ -998,44 +948,31 @@ async fn run_omicron_build(
     let svc_first = &network.internal_services_range.first;
     let svc_last = &network.internal_services_range.last;
     let infra_ip = &network.infra_ip;
-    let pool_first = &network.instance_pool_range.first;
-    let pool_last = &network.instance_pool_range.last;
 
-    // Replace specific values in config-rss.toml using deployment config
     let rss_path = format!("{repo_path}/smf/sled-agent/non-gimlet/config-rss.toml");
 
-    // External DNS IPs
     ssh.run_check(&format!(
         r#"sed -i 's/^external_dns_ips = .*/external_dns_ips = [ "{dns_ip_0}", "{dns_ip_1}" ]/' {rss_path}"#
     )).await?;
-
-    // Internal services IP pool range
     ssh.run_check(&format!(
         r#"sed -i 's/^first = "192\.168\.[0-9]*\.[0-9]*"/first = "{svc_first}"/' {rss_path}"#
     )).await?;
     ssh.run_check(&format!(
         r#"sed -i 's/^last = "192\.168\.[0-9]*\.[0-9]*"/last = "{svc_last}"/' {rss_path}"#
     )).await?;
-
-    // Infra IPs (boundary services / softnpu)
     ssh.run_check(&format!(
         r#"sed -i 's/^infra_ip_first = .*/infra_ip_first = "{infra_ip}"/' {rss_path}"#
     )).await?;
     ssh.run_check(&format!(
         r#"sed -i 's/^infra_ip_last = .*/infra_ip_last = "{infra_ip}"/' {rss_path}"#
     )).await?;
-
-    // Port addresses (softnpu uplink)
     ssh.run_check(&format!(
         r#"sed -i 's|address = "192\.168\.[0-9]*\.[0-9]*/24"|address = "{infra_ip}/24"|' {rss_path}"#
     )).await?;
-
-    // Gateway / nexthop
     ssh.run_check(&format!(
         r#"sed -i 's/nexthop = "192\.168\.[0-9]*\.[0-9]*"/nexthop = "{gateway}"/' {rss_path}"#
     )).await?;
 
-    // Verify key values
     ssh.detail("Verifying network config...").await;
     let rss_check = ssh.run(&format!(
         "grep -E 'external_dns_ips|^first|^last|infra_ip|nexthop|address.*192' {rss_path}"
@@ -1044,12 +981,11 @@ async fn run_omicron_build(
 
     send(tx, BuildEvent::StepCompleted("build-config-network".into()));
 
-    // --- Step: Apply source overrides ---
+    // --- Step: Apply source overrides (early — before cargo build compiles them) ---
     send(tx, BuildEvent::StepStarted("build-config-source".into()));
     ssh.set_step("build-config-source");
     ssh.detail("Applying source code overrides...").await;
 
-    // COCKROACHDB_REDUNDANCY
     if let Some(crdb) = overrides.cockroachdb_redundancy {
         ssh.detail(&format!("Setting COCKROACHDB_REDUNDANCY = {crdb}...")).await;
         ssh.run_check(&format!(
@@ -1058,7 +994,6 @@ async fn run_omicron_build(
         )).await?;
     }
 
-    // CONTROL_PLANE_STORAGE_BUFFER
     if let Some(buffer_gib) = overrides.control_plane_storage_buffer_gib {
         ssh.detail(&format!("Setting CONTROL_PLANE_STORAGE_BUFFER = {buffer_gib} GiB...")).await;
         ssh.run_check(&format!(
@@ -1069,16 +1004,14 @@ async fn run_omicron_build(
 
     send(tx, BuildEvent::StepCompleted("build-config-source".into()));
 
-    // --- Step: Configure vdev count ---
+    // --- Step: Configure vdev count (early — before packaging bakes config.toml) ---
     send(tx, BuildEvent::StepStarted("build-config-vdevs".into()));
     ssh.set_step("build-config-vdevs");
 
     if let Some(vdev_count) = overrides.vdev_count {
         ssh.detail(&format!("Configuring {vdev_count} vdevs...")).await;
 
-        // Build the vdev list: m2 boot disks + u2_0.vdev through u2_{n-1}.vdev
-        // M.2 vdevs are required as boot disks — sled-agent won't start without them
-        // Use \\\" so the quotes survive: Rust raw string → shell → Python
+        // M.2 boot disks + U.2 data disks
         let mut vdev_entries: Vec<String> = vec![
             r#"    \"m2_0.vdev\","#.to_string(),
             r#"    \"m2_1.vdev\","#.to_string(),
@@ -1088,11 +1021,8 @@ async fn run_omicron_build(
         }
         let vdev_list = vdev_entries.join("\n");
 
-        // Replace the vdevs array in config.toml
-        // Expand ~ to absolute path — Python doesn't expand tilde in string literals
         let expanded_repo = repo_path.replace("~", &format!("/home/{ssh_user}"));
         let config_toml_path = format!("{expanded_repo}/smf/sled-agent/non-gimlet/config.toml");
-        // Use a Python one-liner for multi-line replacement since sed is awkward for this
         ssh.run_check(&format!(
             r#"python3 -c "
 import re
@@ -1113,13 +1043,56 @@ print('Updated vdevs to {vdev_count}')
 
     send(tx, BuildEvent::StepCompleted("build-config-vdevs".into()));
 
+    // --- Step: Install builder prerequisites ---
+    send(tx, BuildEvent::StepStarted("build-prereq-builder".into()));
+    ssh.set_step("build-prereq-builder");
+    ssh.detail("Installing builder prerequisites...").await;
+
+    // Use proxy — the script runs cargo xtask download which fetches from buildomat via HTTPS
+    ssh.run_streaming_check_with_proxy(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         pfexec env PATH=$PATH ./tools/install_builder_prerequisites.sh -y' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-prereq-builder".into(), e.to_string()));
+        e
+    })?;
+
+    send(tx, BuildEvent::StepCompleted("build-prereq-builder".into()));
+
+    // --- Step: Install runner prerequisites ---
+    send(tx, BuildEvent::StepStarted("build-prereq-runner".into()));
+    ssh.set_step("build-prereq-runner");
+    ssh.detail("Installing runner prerequisites...").await;
+
+    // Use proxy — the script may download prebuilt artifacts via HTTPS
+    ssh.run_streaming_check_with_proxy(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         pfexec env PATH=$PATH ./tools/install_runner_prerequisites.sh -y' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-prereq-runner".into(), e.to_string()));
+        e
+    })?;
+
+    send(tx, BuildEvent::StepCompleted("build-prereq-runner".into()));
+
+    // --- Step: Fix file ownership ---
+    send(tx, BuildEvent::StepStarted("build-fix-perms".into()));
+    ssh.set_step("build-fix-perms");
+    ssh.detail("Fixing file ownership...").await;
+
+    ssh.run_check(&format!(
+        "pfexec chown -R {ssh_user}:staff ~/.cargo ~/.rustup {repo_path}/target {repo_path}/out 2>/dev/null || true"
+    )).await?;
+
+    send(tx, BuildEvent::StepCompleted("build-fix-perms".into()));
+
     // --- Step: Build omicron-package ---
     send(tx, BuildEvent::StepStarted("build-compile".into()));
     ssh.set_step("build-compile");
     ssh.detail("Building omicron-package (this takes 45-60 min on first build)...").await;
 
-    // Source cargo env and build
-    ssh.run_streaming_check(&format!(
+    // Use proxy — cargo downloads crates from crates.io/github via HTTPS
+    ssh.run_streaming_check_with_proxy(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
          cargo build --release -v --bin omicron-package' 2>&1"
     )).await.map_err(|e| {
@@ -1127,7 +1100,6 @@ print('Updated vdevs to {vdev_count}')
         e
     })?;
 
-    // Create packaging target and build packages
     ssh.detail("Creating packaging target...").await;
     ssh.run_check(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
@@ -1135,7 +1107,9 @@ print('Updated vdevs to {vdev_count}')
     )).await?;
 
     ssh.detail("Packaging all components...").await;
-    ssh.run_streaming_check(&format!(
+    // Use proxy — omicron-package downloads prebuilt binaries from buildomat via HTTPS
+    // reqwest respects https_proxy + SSL_CERT_FILE env vars
+    ssh.run_streaming_check_with_proxy(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
          ./target/release/omicron-package package' 2>&1"
     )).await.map_err(|e| {
@@ -1144,6 +1118,56 @@ print('Updated vdevs to {vdev_count}')
     })?;
 
     send(tx, BuildEvent::StepCompleted("build-compile".into()));
+
+    // --- Step: Patch propolis (download pre-built binary from GitHub release) ---
+    send(tx, BuildEvent::StepStarted("build-patch-propolis".into()));
+    ssh.set_step("build-patch-propolis");
+    ssh.detail("Checking for patched propolis binary...").await;
+
+    // Extract the propolis rev that omicron is pinned to
+    // Use grep + sed (not GNU grep -P/-m which isn't available on illumos)
+    let propolis_rev = ssh.run(&format!(
+        "grep 'oxidecomputer/propolis.*rev=' {repo_path}/Cargo.lock | head -1 | sed 's/.*#//' | cut -c1-7"
+    )).await?;
+    let rev = propolis_rev.stdout.trim().to_string();
+
+    if !rev.is_empty() {
+        let release_tag = format!("patched-{rev}");
+        ssh.detail(&format!("Propolis pinned at {rev}, checking for release {release_tag}...")).await;
+
+        // Check if the release exists and download
+        let download_result = ssh.run(&format!(
+            "curl -sfL -o /tmp/propolis-server.gz \
+             https://github.com/swherdman/propolis/releases/download/{release_tag}/propolis-server.gz \
+             && echo OK || echo MISSING"
+        )).await?;
+
+        if download_result.stdout.trim() == "OK" {
+            ssh.detail("Patched binary downloaded, swapping into tarball...").await;
+
+            // Decompress, extract tarball, swap binary, repack
+            ssh.run_check(&format!(
+                "cd /tmp && \
+                 gunzip -f propolis-server.gz && \
+                 chmod +x propolis-server && \
+                 mkdir -p propolis-repack && cd propolis-repack && \
+                 tar xzf {repo_path}/out/propolis-server.tar.gz && \
+                 cp /tmp/propolis-server root/opt/oxide/propolis-server/bin/propolis-server && \
+                 tar czf {repo_path}/out/propolis-server.tar.gz oxide.json root/ && \
+                 cd /tmp && rm -rf propolis-repack propolis-server"
+            )).await?;
+
+            ssh.detail(&format!("Propolis patched with release {release_tag}")).await;
+        } else {
+            ssh.detail(&format!(
+                "Warning: no patched release for {release_tag} — VMs may crash on string I/O"
+            )).await;
+        }
+    } else {
+        ssh.detail("Warning: could not determine propolis rev from Cargo.lock").await;
+    }
+
+    send(tx, BuildEvent::StepCompleted("build-patch-propolis".into()));
 
     // --- Step: Create virtual hardware ---
     send(tx, BuildEvent::StepStarted("build-vhw".into()));
