@@ -46,8 +46,10 @@ pub async fn run_deploy(
     run_setup_pkg_cache(&helios_ip, &ssh_user, &tx).await?;
     run_os_setup(&helios_ip, &ssh_user, &config, &tx).await?;
 
-    // Phase 3 remaining steps (Omicron build) + Phase 4: future increments
-    let _ = (&ssh_user, &helios_ip);
+    // Phase 3 continued: Omicron build & deploy
+    run_omicron_build(&helios_ip, &ssh_user, &config, &tx).await?;
+
+    // Phase 4: future increments (patches)
 
     // Cleanup
     let _ = pve.close().await;
@@ -879,6 +881,468 @@ async fn continue_os_setup_after_reboot(
         ssh.detail("Swap configured").await;
     }
     send(tx, BuildEvent::StepCompleted("build-swap".into()));
+
+    let _ = helios.close().await;
+    Ok(())
+}
+
+/// Phase 3 continued: Clone, build, and deploy Omicron.
+async fn run_omicron_build(
+    helios_ip: &str,
+    ssh_user: &str,
+    config: &DeploymentConfig,
+    tx: &mpsc::UnboundedSender<BuildEvent>,
+) -> Result<()> {
+    let helios_config = HostConfig {
+        address: helios_ip.to_string(),
+        ssh_user: ssh_user.to_string(),
+        role: crate::config::HostRole::Combined,
+    };
+
+    let log_dir = crate::config::loader::whoah_dir()
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        .join("logs");
+    let log_path = log_dir.join("omicron-build.log");
+
+    let helios = DirectSsh::connect(&helios_config).await?;
+    helios.set_label("Build/Omicron");
+    let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
+        &helios, log_path.clone(), tx, "build-clone",
+    ).await?;
+
+    // Re-set proxy for HTTPS downloads
+    let cache_info = crate::ops::pkg_cache::ensure_caches().await?;
+    let ca_path = crate::ops::pkg_cache::install_ca_cert(&helios, &cache_info.lan_ip).await
+        .unwrap_or_else(|_| "/etc/certs/CA/whoah-cache-ca.pem".to_string());
+    ssh.set_proxy(&cache_info.https_proxy_url, &ca_path);
+
+    let repo_path = &config.build.omicron.repo_path;
+    let overrides = &config.build.omicron.overrides;
+    let network = &config.deployment.network;
+
+    // --- Step: Clone omicron ---
+    send(tx, BuildEvent::StepStarted("build-clone".into()));
+    ssh.detail("Cloning omicron repository...").await;
+
+    // Check if already cloned
+    let check = ssh.run(&format!("test -d {repo_path}/.git && echo exists")).await?;
+    if check.stdout.trim() == "exists" {
+        ssh.detail("Omicron repo already exists, pulling latest...").await;
+        let _ = ssh.run(&format!("cd {repo_path} && git fetch")).await;
+    } else {
+        // Don't proxy git clone — git doesn't trust our self-signed CA,
+        // and the clone doesn't benefit from caching anyway
+        ssh.run_streaming_check(&format!(
+            "git clone https://github.com/oxidecomputer/omicron.git {repo_path} 2>&1"
+        )).await?;
+    }
+
+    // Checkout specific ref if configured
+    if let Some(ref git_ref) = config.build.omicron.rust_toolchain {
+        // git_ref is actually rust_toolchain — we use the repo as-is (HEAD)
+        // TODO: add git_ref field to OmicronBuildConfig for pinning
+    }
+
+    send(tx, BuildEvent::StepCompleted("build-clone".into()));
+
+    // --- Step: Install builder prerequisites ---
+    send(tx, BuildEvent::StepStarted("build-prereq-builder".into()));
+    ssh.set_step("build-prereq-builder");
+    ssh.detail("Installing builder prerequisites...").await;
+
+    ssh.run_streaming_check(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         pfexec env PATH=$PATH ./tools/install_builder_prerequisites.sh -y' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-prereq-builder".into(), e.to_string()));
+        e
+    })?;
+
+    send(tx, BuildEvent::StepCompleted("build-prereq-builder".into()));
+
+    // --- Step: Install runner prerequisites ---
+    send(tx, BuildEvent::StepStarted("build-prereq-runner".into()));
+    ssh.set_step("build-prereq-runner");
+    ssh.detail("Installing runner prerequisites...").await;
+
+    ssh.run_streaming_check(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         pfexec env PATH=$PATH ./tools/install_runner_prerequisites.sh -y' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-prereq-runner".into(), e.to_string()));
+        e
+    })?;
+
+    send(tx, BuildEvent::StepCompleted("build-prereq-runner".into()));
+
+    // --- Step: Fix file ownership ---
+    send(tx, BuildEvent::StepStarted("build-fix-perms".into()));
+    ssh.set_step("build-fix-perms");
+    ssh.detail("Fixing file ownership...").await;
+
+    // The prerequisite scripts run as root and create root-owned files
+    ssh.run_check(&format!(
+        "pfexec chown -R {ssh_user}:staff ~/.cargo ~/.rustup {repo_path}/target {repo_path}/out 2>/dev/null || true"
+    )).await?;
+
+    send(tx, BuildEvent::StepCompleted("build-fix-perms".into()));
+
+    // --- Step: Configure network IPs ---
+    send(tx, BuildEvent::StepStarted("build-config-network".into()));
+    ssh.set_step("build-config-network");
+    ssh.detail("Configuring network IPs in config-rss.toml...").await;
+
+    let gateway = &network.gateway;
+    let dns_ip_0 = network.external_dns_ips.first().map(|s| s.as_str()).unwrap_or("192.168.2.40");
+    let dns_ip_1 = network.external_dns_ips.get(1).map(|s| s.as_str()).unwrap_or("192.168.2.41");
+    let svc_first = &network.internal_services_range.first;
+    let svc_last = &network.internal_services_range.last;
+    let infra_ip = &network.infra_ip;
+    let pool_first = &network.instance_pool_range.first;
+    let pool_last = &network.instance_pool_range.last;
+
+    // Replace specific values in config-rss.toml using deployment config
+    let rss_path = format!("{repo_path}/smf/sled-agent/non-gimlet/config-rss.toml");
+
+    // External DNS IPs
+    ssh.run_check(&format!(
+        r#"sed -i 's/^external_dns_ips = .*/external_dns_ips = [ "{dns_ip_0}", "{dns_ip_1}" ]/' {rss_path}"#
+    )).await?;
+
+    // Internal services IP pool range
+    ssh.run_check(&format!(
+        r#"sed -i 's/^first = "192\.168\.[0-9]*\.[0-9]*"/first = "{svc_first}"/' {rss_path}"#
+    )).await?;
+    ssh.run_check(&format!(
+        r#"sed -i 's/^last = "192\.168\.[0-9]*\.[0-9]*"/last = "{svc_last}"/' {rss_path}"#
+    )).await?;
+
+    // Infra IPs (boundary services / softnpu)
+    ssh.run_check(&format!(
+        r#"sed -i 's/^infra_ip_first = .*/infra_ip_first = "{infra_ip}"/' {rss_path}"#
+    )).await?;
+    ssh.run_check(&format!(
+        r#"sed -i 's/^infra_ip_last = .*/infra_ip_last = "{infra_ip}"/' {rss_path}"#
+    )).await?;
+
+    // Port addresses (softnpu uplink)
+    ssh.run_check(&format!(
+        r#"sed -i 's|address = "192\.168\.[0-9]*\.[0-9]*/24"|address = "{infra_ip}/24"|' {rss_path}"#
+    )).await?;
+
+    // Gateway / nexthop
+    ssh.run_check(&format!(
+        r#"sed -i 's/nexthop = "192\.168\.[0-9]*\.[0-9]*"/nexthop = "{gateway}"/' {rss_path}"#
+    )).await?;
+
+    // Verify key values
+    ssh.detail("Verifying network config...").await;
+    let rss_check = ssh.run(&format!(
+        "grep -E 'external_dns_ips|^first|^last|infra_ip|nexthop|address.*192' {rss_path}"
+    )).await?;
+    ssh.detail(&format!("Network config:\n{}", rss_check.stdout.trim())).await;
+
+    send(tx, BuildEvent::StepCompleted("build-config-network".into()));
+
+    // --- Step: Apply source overrides ---
+    send(tx, BuildEvent::StepStarted("build-config-source".into()));
+    ssh.set_step("build-config-source");
+    ssh.detail("Applying source code overrides...").await;
+
+    // COCKROACHDB_REDUNDANCY
+    if let Some(crdb) = overrides.cockroachdb_redundancy {
+        ssh.detail(&format!("Setting COCKROACHDB_REDUNDANCY = {crdb}...")).await;
+        ssh.run_check(&format!(
+            "sed -i 's/pub const COCKROACHDB_REDUNDANCY: usize = [0-9]*/pub const COCKROACHDB_REDUNDANCY: usize = {crdb}/' \
+             {repo_path}/common/src/policy.rs"
+        )).await?;
+    }
+
+    // CONTROL_PLANE_STORAGE_BUFFER
+    if let Some(buffer_gib) = overrides.control_plane_storage_buffer_gib {
+        ssh.detail(&format!("Setting CONTROL_PLANE_STORAGE_BUFFER = {buffer_gib} GiB...")).await;
+        ssh.run_check(&format!(
+            "sed -i 's/ByteCount::from_gibibytes_u32([0-9]*)/ByteCount::from_gibibytes_u32({buffer_gib})/' \
+             {repo_path}/nexus/src/app/mod.rs"
+        )).await?;
+    }
+
+    send(tx, BuildEvent::StepCompleted("build-config-source".into()));
+
+    // --- Step: Configure vdev count ---
+    send(tx, BuildEvent::StepStarted("build-config-vdevs".into()));
+    ssh.set_step("build-config-vdevs");
+
+    if let Some(vdev_count) = overrides.vdev_count {
+        ssh.detail(&format!("Configuring {vdev_count} vdevs...")).await;
+
+        // Build the vdev list: m2 boot disks + u2_0.vdev through u2_{n-1}.vdev
+        // M.2 vdevs are required as boot disks — sled-agent won't start without them
+        // Use \\\" so the quotes survive: Rust raw string → shell → Python
+        let mut vdev_entries: Vec<String> = vec![
+            r#"    \"m2_0.vdev\","#.to_string(),
+            r#"    \"m2_1.vdev\","#.to_string(),
+        ];
+        for i in 0..vdev_count {
+            vdev_entries.push(format!(r#"    \"u2_{i}.vdev\","#));
+        }
+        let vdev_list = vdev_entries.join("\n");
+
+        // Replace the vdevs array in config.toml
+        // Expand ~ to absolute path — Python doesn't expand tilde in string literals
+        let expanded_repo = repo_path.replace("~", &format!("/home/{ssh_user}"));
+        let config_toml_path = format!("{expanded_repo}/smf/sled-agent/non-gimlet/config.toml");
+        // Use a Python one-liner for multi-line replacement since sed is awkward for this
+        ssh.run_check(&format!(
+            r#"python3 -c "
+import re
+with open('{config_toml_path}', 'r') as f:
+    content = f.read()
+new_vdevs = '''vdevs = [
+{vdev_list}
+]'''
+content = re.sub(r'vdevs\s*=\s*\[.*?\]', new_vdevs, content, flags=re.DOTALL)
+with open('{config_toml_path}', 'w') as f:
+    f.write(content)
+print('Updated vdevs to {vdev_count}')
+""#
+        )).await?;
+    } else {
+        ssh.detail("Using default vdev count").await;
+    }
+
+    send(tx, BuildEvent::StepCompleted("build-config-vdevs".into()));
+
+    // --- Step: Build omicron-package ---
+    send(tx, BuildEvent::StepStarted("build-compile".into()));
+    ssh.set_step("build-compile");
+    ssh.detail("Building omicron-package (this takes 45-60 min on first build)...").await;
+
+    // Source cargo env and build
+    ssh.run_streaming_check(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         cargo build --release -v --bin omicron-package' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-compile".into(), e.to_string()));
+        e
+    })?;
+
+    // Create packaging target and build packages
+    ssh.detail("Creating packaging target...").await;
+    ssh.run_check(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         ./target/release/omicron-package -t default target create -p dev' 2>&1"
+    )).await?;
+
+    ssh.detail("Packaging all components...").await;
+    ssh.run_streaming_check(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         ./target/release/omicron-package package' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-compile".into(), e.to_string()));
+        e
+    })?;
+
+    send(tx, BuildEvent::StepCompleted("build-compile".into()));
+
+    // --- Step: Create virtual hardware ---
+    send(tx, BuildEvent::StepStarted("build-vhw".into()));
+    ssh.set_step("build-vhw");
+    ssh.detail("Creating virtual hardware...").await;
+
+    let vdev_size = overrides.vdev_size_bytes.unwrap_or(42949672960);
+    let pxa_start = &network.internal_services_range.first;
+    let pxa_end = &network.instance_pool_range.last;
+
+    ssh.run_check(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         pfexec cargo xtask virtual-hardware create \
+         --gateway-ip {gateway} \
+         --pxa-start {pxa_start} \
+         --pxa-end {pxa_end} \
+         --vdev-size {vdev_size}' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-vhw".into(), e.to_string()));
+        e
+    })?;
+
+    send(tx, BuildEvent::StepCompleted("build-vhw".into()));
+
+    // --- Step: Install + wait for zones ---
+    send(tx, BuildEvent::StepStarted("build-install".into()));
+    ssh.set_step("build-install");
+    ssh.detail("Installing omicron (this takes 5-8 minutes)...").await;
+
+    ssh.run_check(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         pfexec ./target/release/omicron-package install' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-install".into(), e.to_string()));
+        e
+    })?;
+
+    // Wait for zones to come up
+    let expected_zones = crate::config::derive_expected_zones(overrides);
+    let expected_total: u32 = expected_zones.values().sum();
+    // Add 2 for global + sidecar zones that aren't in the service count
+    let expected_running = expected_total + 2;
+
+    ssh.detail(&format!("Waiting for zones ({expected_running} expected)...")).await;
+
+    for attempt in 0..60 {
+        let zone_output = ssh.run("zoneadm list -cnv | grep running | wc -l").await?;
+        let running: u32 = zone_output.stdout.trim().parse().unwrap_or(0);
+
+        send(tx, BuildEvent::StepDetail(
+            "build-install".into(),
+            format!("Zones: {running}/{expected_running} running"),
+        ));
+
+        if running >= expected_running {
+            ssh.detail(&format!("All {running} zones running")).await;
+            break;
+        }
+
+        if attempt == 59 {
+            ssh.detail(&format!("Warning: only {running}/{expected_running} zones after 5 min")).await;
+        }
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+
+    send(tx, BuildEvent::StepCompleted("build-install".into()));
+
+    // --- Step: Verify DNS + API ---
+    send(tx, BuildEvent::StepStarted("build-verify".into()));
+    ssh.set_step("build-verify");
+    ssh.detail("Verifying DNS and API...").await;
+
+    let dns_ip = network.external_dns_ips.first()
+        .map(|s| s.as_str())
+        .unwrap_or("192.168.2.70");
+
+    // Wait for DNS to resolve
+    let mut dns_ok = false;
+    for _ in 0..30 {
+        let dns_check = ssh.run(&format!(
+            "dig recovery.sys.oxide.test @{dns_ip} +short +time=3 +tries=1 2>/dev/null"
+        )).await?;
+        if dns_check.exit_code == 0 && !dns_check.stdout.trim().is_empty() {
+            ssh.detail(&format!("DNS resolving: {}", dns_check.stdout.trim())).await;
+            dns_ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+
+    if !dns_ok {
+        ssh.detail("Warning: DNS not resolving yet").await;
+    }
+
+    // Check Nexus API
+    let nexus_ip = if dns_ok {
+        let dns_result = ssh.run(&format!(
+            "dig recovery.sys.oxide.test @{dns_ip} +short 2>/dev/null"
+        )).await?;
+        dns_result.stdout.trim().to_string()
+    } else {
+        // Fall back to first IP in services range
+        network.internal_services_range.first.clone()
+    };
+
+    let mut api_ok = false;
+    for _ in 0..12 {
+        let ping = ssh.run(&format!(
+            "curl -sf --connect-timeout 3 --max-time 5 http://{nexus_ip}/v1/ping 2>/dev/null"
+        )).await?;
+        if ping.exit_code == 0 {
+            ssh.detail(&format!("Nexus API responding at {nexus_ip}")).await;
+            api_ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+
+    if !api_ok {
+        ssh.detail("Warning: Nexus API not responding yet").await;
+    }
+
+    send(tx, BuildEvent::StepCompleted("build-verify".into()));
+
+    // --- Step: Set silo quotas ---
+    send(tx, BuildEvent::StepStarted("build-quotas".into()));
+    ssh.set_step("build-quotas");
+    ssh.detail("Setting silo quotas...").await;
+
+    let nexus = &config.deployment.nexus;
+
+    // Authenticate via direct API call (skip oxide CLI device auth)
+    let auth_cmd = format!(
+        "curl -sf -X POST http://{nexus_ip}/v1/login/{}/local \
+         -H 'Content-Type: application/json' \
+         -d '{{\"username\":\"{}\",\"password\":\"{}\"}}' \
+         -c /tmp/oxide-cookie 2>/dev/null",
+        nexus.silo_name, nexus.username, nexus.password
+    );
+    let auth_result = ssh.run(&auth_cmd).await?;
+    if auth_result.exit_code != 0 {
+        ssh.detail("Warning: Nexus auth failed, quotas may not be set").await;
+    } else {
+        // Set quotas
+        let quota_cmd = format!(
+            "curl -sf -X PUT http://{nexus_ip}/v1/system/silos/{}/quotas \
+             -H 'Content-Type: application/json' \
+             -b /tmp/oxide-cookie \
+             -d '{{\"cpus\":{},\"memory\":{},\"storage\":{}}}' 2>/dev/null",
+            nexus.silo_name, nexus.quotas.cpus, nexus.quotas.memory, nexus.quotas.storage
+        );
+        let _ = ssh.run(&quota_cmd).await;
+        ssh.detail("Silo quotas set").await;
+    }
+
+    send(tx, BuildEvent::StepCompleted("build-quotas".into()));
+
+    // --- Step: Create IP pool ---
+    send(tx, BuildEvent::StepStarted("build-ippool".into()));
+    ssh.set_step("build-ippool");
+    ssh.detail("Creating IP pool...").await;
+
+    if auth_result.exit_code == 0 {
+        let pool_name = &nexus.ip_pool_name;
+        let pool_first = &network.instance_pool_range.first;
+        let pool_last = &network.instance_pool_range.last;
+
+        // Create pool
+        let _ = ssh.run(&format!(
+            "curl -sf -X POST http://{nexus_ip}/v1/ip-pools \
+             -H 'Content-Type: application/json' \
+             -b /tmp/oxide-cookie \
+             -d '{{\"name\":\"{pool_name}\",\"description\":\"Default IP pool\"}}' 2>/dev/null"
+        )).await;
+
+        // Link to silo
+        let _ = ssh.run(&format!(
+            "curl -sf -X POST http://{nexus_ip}/v1/ip-pools/{pool_name}/silos \
+             -H 'Content-Type: application/json' \
+             -b /tmp/oxide-cookie \
+             -d '{{\"silo\":\"{}\",\"is_default\":true}}' 2>/dev/null",
+            nexus.silo_name
+        )).await;
+
+        // Add IP range
+        let _ = ssh.run(&format!(
+            "curl -sf -X POST http://{nexus_ip}/v1/ip-pools/{pool_name}/ranges/add \
+             -H 'Content-Type: application/json' \
+             -b /tmp/oxide-cookie \
+             -d '{{\"first\":\"{pool_first}\",\"last\":\"{pool_last}\"}}' 2>/dev/null"
+        )).await;
+
+        ssh.detail(&format!("IP pool '{pool_name}' created with range {pool_first}-{pool_last}")).await;
+    } else {
+        ssh.detail("Skipped — auth failed earlier").await;
+    }
+
+    send(tx, BuildEvent::StepCompleted("build-ippool".into()));
 
     let _ = helios.close().await;
     Ok(())

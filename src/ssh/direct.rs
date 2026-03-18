@@ -51,6 +51,7 @@ impl DirectSsh {
         let output = tokio::process::Command::new("ssh")
             .args([
                 "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "ConnectTimeout=10",
                 "-o", "ServerAliveInterval=30",
                 "-o", "ServerAliveCountMax=6",
@@ -109,6 +110,8 @@ impl DirectSsh {
         vec![
             "-o".to_string(),
             "StrictHostKeyChecking=no".to_string(),
+            "-o".to_string(),
+            "UserKnownHostsFile=/dev/null".to_string(),
             "-o".to_string(),
             format!("ControlPath={}", self.ctl_path.display()),
             "-o".to_string(),
