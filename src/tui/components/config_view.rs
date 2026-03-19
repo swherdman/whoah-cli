@@ -72,6 +72,9 @@ pub struct ConfigView {
     active_name: Option<String>,
     detail_lines: Vec<DetailLine>,
 
+    // The deployment that Build/Monitor/Recovery actually use
+    activated_name: Option<String>,
+
     // Right panel navigation & editing
     selected_line: usize,
     scroll_offset: usize,
@@ -82,9 +85,15 @@ pub struct ConfigView {
 }
 
 impl ConfigView {
-    pub fn new() -> Self {
+    pub fn new(initial_deployment: &str) -> Self {
         let deployments = list_deployments().unwrap_or_default();
         let hypervisors = list_hypervisors().unwrap_or_default();
+
+        // Find the index of the initial deployment, fall back to 0
+        let initial_idx = deployments
+            .iter()
+            .position(|n| n == initial_deployment)
+            .unwrap_or(0);
 
         let mut view = Self {
             deployments,
@@ -98,6 +107,7 @@ impl ConfigView {
             active_state: None,
             active_name: None,
             detail_lines: Vec::new(),
+            activated_name: Some(initial_deployment.to_string()),
             selected_line: 0,
             scroll_offset: 0,
             edit_mode: EditMode::Viewing,
@@ -105,7 +115,7 @@ impl ConfigView {
         };
 
         if !view.deployments.is_empty() {
-            view.deployment_list_state.select(Some(0));
+            view.deployment_list_state.select(Some(initial_idx));
             view.load_selected_deployment();
         }
 
@@ -114,6 +124,40 @@ impl ConfigView {
 
     pub fn is_editing(&self) -> bool {
         matches!(self.edit_mode, EditMode::Editing { .. })
+    }
+
+    pub fn is_left_panel_focused(&self) -> bool {
+        self.focus == ConfigFocus::LeftPanel
+    }
+
+    pub fn selected_deployment_name(&self) -> Option<&str> {
+        self.active_name.as_deref()
+    }
+
+    pub fn activated_name(&self) -> Option<&str> {
+        self.activated_name.as_deref()
+    }
+
+    pub fn activated_config(&self) -> Option<&DeploymentConfig> {
+        if self.active_name == self.activated_name {
+            self.active_config.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Attempt to activate the currently selected deployment.
+    /// Returns the name and config if activation succeeded.
+    pub fn activate_selected(&mut self) -> Option<(&str, &DeploymentConfig)> {
+        if let (Some(name), Some(_config)) = (&self.active_name, &self.active_config) {
+            self.activated_name = Some(name.clone());
+            // Re-borrow to satisfy the borrow checker
+            let name = self.activated_name.as_deref().unwrap();
+            let config = self.active_config.as_ref().unwrap();
+            Some((name, config))
+        } else {
+            None
+        }
     }
 
     pub fn refresh_lists(&mut self) {
@@ -481,13 +525,6 @@ impl ConfigView {
     // --- Editing ---
 
     pub fn start_edit(&mut self) {
-        if self.focus == ConfigFocus::LeftPanel {
-            // Enter on left panel = switch to right panel, select first editable field
-            self.selected_line = self.first_editable_line();
-            self.scroll_offset = 0;
-            self.focus = ConfigFocus::RightPanel;
-            return;
-        }
         if let Some(line) = self.detail_lines.get(self.selected_line) {
             if line.field.is_some() {
                 let value = line.raw_value.clone().unwrap_or_default();
@@ -573,7 +610,12 @@ impl ConfigView {
         let items: Vec<ListItem> = self
             .deployments
             .iter()
-            .map(|name| ListItem::new(name.as_str()).style(Style::default().fg(p.text_default)))
+            .map(|name| {
+                let is_activated = self.activated_name.as_deref() == Some(name.as_str());
+                let prefix = if is_activated { "● " } else { "  " };
+                ListItem::new(format!("{prefix}{name}"))
+                    .style(Style::default().fg(p.text_default))
+            })
             .collect();
         let deploy_list = List::new(items)
             .highlight_style(Style::default().fg(p.green_primary).add_modifier(Modifier::BOLD))

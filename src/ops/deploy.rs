@@ -43,6 +43,15 @@ pub async fn run_deploy(
     // Phase 2: Configure Access
     let ssh_user = run_configure_access(&helios_ip, &tx).await?;
 
+    // Notify the App of the discovered IP so it can update config
+    send(
+        &tx,
+        BuildEvent::HostDiscovered {
+            address: helios_ip.clone(),
+            ssh_user: ssh_user.clone(),
+        },
+    );
+
     // Phase 3: Build & Deploy
     run_setup_pkg_cache(&helios_ip, &ssh_user, &tx).await?;
     run_os_setup(&helios_ip, &ssh_user, &config, &tx).await?;
@@ -433,17 +442,18 @@ async fn run_provision(
         // Look for an IP address in the output
         for line in &addr_lines {
             let trimmed = line.trim();
-            // Skip header lines and empty lines
+            // Skip header lines, empty lines, errors, and prompts
             if trimmed.is_empty()
                 || trimmed.starts_with("ADDR")
                 || trimmed.starts_with("ipadm")
                 || trimmed.ends_with('#')
+                || trimmed.contains("login:")
             {
                 continue;
             }
             // Extract IP (format: "192.168.2.x/24" or just "192.168.2.x")
             if let Some(ip) = trimmed.split('/').next() {
-                if ip.contains('.') {
+                if is_ipv4(ip) {
                     ip_address = ip.to_string();
                     break;
                 }
@@ -1328,52 +1338,107 @@ print('Updated vdevs to {vdev_count}')
     // --- Step: Verify DNS + API ---
     send(tx, BuildEvent::StepStarted("build-verify".into()));
     ssh.set_step("build-verify");
-    ssh.detail("Verifying DNS and API...").await;
+    ssh.detail("Waiting for external DNS zones...").await;
 
     let dns_ip = network.external_dns_ips.first()
         .map(|s| s.as_str())
         .unwrap_or("192.168.2.70");
 
-    // Wait for DNS to resolve
-    let mut dns_ok = false;
-    for _ in 0..30 {
-        let dns_check = ssh.run(&format!(
-            "dig recovery.sys.oxide.test @{dns_ip} +short +time=3 +tries=1 2>/dev/null"
-        )).await?;
-        if dns_check.exit_code == 0 && !dns_check.stdout.trim().is_empty() {
-            ssh.detail(&format!("DNS resolving: {}", dns_check.stdout.trim())).await;
-            dns_ok = true;
+    // Phase 1: Wait for external_dns zones to reach running state
+    let mut dns_zones_up = false;
+    for attempt in 0..60 {
+        let zone_check = ssh.run(
+            "zoneadm list -cv | grep external_dns | grep running | wc -l"
+        ).await?;
+        let running: u32 = zone_check.stdout.trim().parse().unwrap_or(0);
+
+        if running > 0 {
+            ssh.detail(&format!("{running} external_dns zone(s) running")).await;
+            dns_zones_up = true;
             break;
         }
+
+        if attempt % 6 == 5 {
+            ssh.detail(&format!(
+                "Waiting for external_dns zones ({running} running, {}s elapsed)...",
+                (attempt + 1) * 5
+            )).await;
+        }
         tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+
+    // Phase 2: Once zones are up, verify DNS actually resolves
+    let mut dns_ok = false;
+    if dns_zones_up {
+        ssh.detail(&format!("Checking DNS resolution at {dns_ip}...")).await;
+        for _ in 0..12 {
+            let dns_check = ssh.run(&format!(
+                "dig recovery.sys.oxide.test @{dns_ip} +short +time=3 +tries=1 2>/dev/null"
+            )).await?;
+            if dns_check.exit_code == 0 && !dns_check.stdout.trim().is_empty() {
+                ssh.detail(&format!("DNS resolving: {}", dns_check.stdout.trim())).await;
+                dns_ok = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
     }
 
     if !dns_ok {
         ssh.detail("Warning: DNS not resolving yet").await;
     }
 
-    // Check Nexus API
+    // Phase 3: Wait for nexus zones to reach running state
+    ssh.detail("Waiting for Nexus zones...").await;
+    let mut nexus_zones_up = false;
+    for attempt in 0..60 {
+        let zone_check = ssh.run(
+            "zoneadm list -cv | grep nexus | grep running | wc -l"
+        ).await?;
+        let running: u32 = zone_check.stdout.trim().parse().unwrap_or(0);
+
+        if running > 0 {
+            ssh.detail(&format!("{running} nexus zone(s) running")).await;
+            nexus_zones_up = true;
+            break;
+        }
+
+        if attempt % 6 == 5 {
+            ssh.detail(&format!(
+                "Waiting for nexus zones ({running} running, {}s elapsed)...",
+                (attempt + 1) * 5
+            )).await;
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+
+    // Phase 4: Once nexus zones are up, verify API responds
     let nexus_ip = if dns_ok {
         let dns_result = ssh.run(&format!(
             "dig recovery.sys.oxide.test @{dns_ip} +short 2>/dev/null"
         )).await?;
-        dns_result.stdout.trim().to_string()
+        let resolved = dns_result.stdout.trim().to_string();
+        // dig may return multiple IPs; take the first
+        resolved.lines().next().unwrap_or(&resolved).to_string()
     } else {
         // Fall back to first IP in services range
         network.internal_services_range.first.clone()
     };
 
     let mut api_ok = false;
-    for _ in 0..12 {
-        let ping = ssh.run(&format!(
-            "curl -sf --connect-timeout 3 --max-time 5 http://{nexus_ip}/v1/ping 2>/dev/null"
-        )).await?;
-        if ping.exit_code == 0 {
-            ssh.detail(&format!("Nexus API responding at {nexus_ip}")).await;
-            api_ok = true;
-            break;
+    if nexus_zones_up {
+        ssh.detail(&format!("Checking Nexus API at {nexus_ip}...")).await;
+        for _ in 0..12 {
+            let ping = ssh.run(&format!(
+                "curl -sf --connect-timeout 3 --max-time 5 http://{nexus_ip}/v1/ping 2>/dev/null"
+            )).await?;
+            if ping.exit_code == 0 {
+                ssh.detail(&format!("Nexus API responding at {nexus_ip}")).await;
+                api_ok = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
     if !api_ok {
@@ -1611,4 +1676,10 @@ async fn run_setup_pkg_cache(
 
 fn send(tx: &mpsc::UnboundedSender<BuildEvent>, event: BuildEvent) {
     let _ = tx.send(event);
+}
+
+/// Quick check that a string looks like a dotted-quad IPv4 address.
+fn is_ipv4(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok())
 }

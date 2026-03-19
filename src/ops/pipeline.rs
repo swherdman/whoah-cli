@@ -255,7 +255,6 @@ pub fn build_deploy_pipeline() -> Pipeline {
                     Step::new("build-config-network", "Configure network IPs"),
                     Step::new("build-config-source", "Apply source overrides"),
                     Step::new("build-config-vdevs", "Configure vdev count"),
-                    Step::new("build-prereq-builder", "Install builder prerequisites"),
                     Step::new("build-prereq-runner", "Install runner prerequisites"),
                     Step::new("build-fix-perms", "Fix file ownership"),
                     Step::new("build-compile", "Build omicron-package"),
@@ -284,7 +283,7 @@ mod tests {
         assert_eq!(p.phases[2].name, "Build & Deploy");
         let (done, total) = p.progress();
         assert_eq!(done, 0);
-        assert_eq!(total, 28);
+        assert_eq!(total, 27);
     }
 
     #[test]
@@ -336,7 +335,7 @@ mod tests {
         let p = build_deploy_pipeline();
         assert_eq!(p.find_step("prov-create"), Some((0, 0)));
         assert_eq!(p.find_step("access-verify"), Some((1, 1)));
-        assert_eq!(p.find_step("build-patch-propolis"), Some((2, 15)));
+        assert_eq!(p.find_step("build-patch-propolis"), Some((2, 14)));
         assert_eq!(p.find_step("nonexistent"), None);
     }
 

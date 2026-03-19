@@ -63,6 +63,7 @@ pub struct App {
     // SSH state
     host: Option<Arc<SshHost>>,
     last_poll: Option<Instant>,
+    needs_reconnect: bool,
 
     // Event channel for async tasks to push events
     app_event_tx: Option<mpsc::UnboundedSender<Event>>,
@@ -86,11 +87,12 @@ impl App {
             status_bar: StatusBarComponent::new(&deployment_name),
             recovery_view: RecoveryView::new(),
             build_view: BuildView::new(),
-            config_view: ConfigView::new(),
+            config_view: ConfigView::new(&deployment_name),
             debug_view: DebugView::new(),
             pipeline: pipeline::build_deploy_pipeline(),
             host: None,
             last_poll: None,
+            needs_reconnect: false,
             app_event_tx: None,
         }
     }
@@ -167,6 +169,41 @@ impl App {
                 );
             }
         }
+    }
+
+    fn spawn_connect(&mut self) {
+        let host_config = match self.config.deployment.hosts.values().next() {
+            Some(h) => h.clone(),
+            None => {
+                tracing::error!("No hosts configured for active deployment");
+                return;
+            }
+        };
+        let Some(tx) = self.app_event_tx.clone() else {
+            return;
+        };
+        tracing::info!(
+            "Connecting to {}@{}...",
+            host_config.ssh_user,
+            host_config.address
+        );
+
+        tokio::spawn(async move {
+            match SshHost::connect(&host_config).await {
+                Ok(host) => {
+                    let _ = tx.send(Event::App(AppEvent::Connected {
+                        address: host_config.address.clone(),
+                        host: Arc::new(host),
+                    }));
+                }
+                Err(e) => {
+                    let _ = tx.send(Event::App(AppEvent::Alert {
+                        severity: Severity::Critical,
+                        message: format!("SSH connection failed: {e}"),
+                    }));
+                }
+            }
+        });
     }
 
     fn handle_event(&mut self, event: &Event) -> Option<Action> {
@@ -281,7 +318,58 @@ impl App {
                         None
                     }
                     KeyCode::Enter => {
-                        self.config_view.start_edit();
+                        if self.config_view.is_left_panel_focused() {
+                            // Activate the selected deployment
+                            let build_running = self.pipeline.started.is_some()
+                                && !self.pipeline.is_complete();
+                            let recovery_running = self.recovery_view.is_active();
+                            let selected = self.config_view.selected_deployment_name()
+                                .map(|s| s.to_string());
+                            let already_active = selected.as_deref()
+                                == Some(self.deployment_name.as_str());
+
+                            if !already_active && (build_running || recovery_running) {
+                                tracing::warn!(
+                                    "Cannot switch deployment: operation in progress"
+                                );
+                            } else if let Some((name, config)) =
+                                self.config_view.activate_selected()
+                            {
+                                let name = name.to_string();
+                                let config = config.clone();
+                                if name != self.deployment_name {
+                                    self.deployment_name = name.clone();
+                                    self.config = config;
+                                    self.status_bar.set_deployment(&name);
+                                    self.needs_reconnect = true;
+                                    // Reset components that depend on config
+                                    let thresholds =
+                                        self.config.monitoring.thresholds.clone();
+                                    let vdev_size = self
+                                        .config
+                                        .build
+                                        .omicron
+                                        .overrides
+                                        .vdev_size_bytes
+                                        .unwrap_or(42949672960);
+                                    self.disk_panel =
+                                        DiskPanel::new(thresholds, vdev_size);
+                                    self.status_panel = StatusPanel::new();
+                                    tracing::info!(
+                                        "Switched active deployment to {name}"
+                                    );
+                                }
+                            }
+                        } else {
+                            // Right panel: start editing field
+                            self.config_view.start_edit();
+                        }
+                        None
+                    }
+                    KeyCode::Char('e') => {
+                        if self.config_view.is_left_panel_focused() {
+                            self.config_view.toggle_focus();
+                        }
                         None
                     }
                     _ => None,
@@ -308,6 +396,21 @@ impl App {
             }
             Action::SwitchScreen(screen) => {
                 self.screen = screen;
+                if self.needs_reconnect
+                    && matches!(screen, Screen::Monitor | Screen::Build)
+                {
+                    self.needs_reconnect = false;
+                    // Disconnect old host
+                    if let Some(host) = self.host.take() {
+                        if let Ok(h) = Arc::try_unwrap(host) {
+                            tokio::spawn(async move {
+                                let _ = h.close().await;
+                            });
+                        }
+                    }
+                    self.status_bar.connected = false;
+                    self.spawn_connect();
+                }
             }
             Action::FocusNext | Action::FocusPrev => {
                 self.focused = match self.focused {
@@ -336,9 +439,14 @@ impl App {
                 self.spawn_status_poll();
             }
             Action::StartBuild => {
-                if self.pipeline.started.is_some() {
+                let in_progress = self.pipeline.started.is_some()
+                    && !self.pipeline.is_complete()
+                    && !self.pipeline.has_failure();
+                if in_progress {
                     tracing::info!("Build already in progress");
                 } else {
+                    // Reset pipeline for a fresh run
+                    self.pipeline = pipeline::build_deploy_pipeline();
                     tracing::info!("Starting build pipeline...");
                     self.screen = Screen::Build;
                     self.spawn_build();
@@ -429,6 +537,12 @@ impl App {
             AppEvent::Build(build_event) => {
                 self.handle_build_event(build_event);
             }
+            AppEvent::Connected { address, host } => {
+                self.status_bar.set_connected(address);
+                self.host = Some(host.clone());
+                tracing::info!("Connected to {address}");
+                self.spawn_status_poll();
+            }
         }
     }
 
@@ -458,6 +572,45 @@ impl App {
             BuildEvent::StepFailed(id, error) => {
                 self.pipeline.fail_step(id, error.clone());
                 tracing::error!("Build: FAILED — {error}");
+            }
+            BuildEvent::HostDiscovered { address, ssh_user } => {
+                tracing::info!("Build discovered host at {address} (user: {ssh_user})");
+
+                // Update the first host entry in the in-memory config
+                if let Some(host) = self.config.deployment.hosts.values_mut().next() {
+                    host.address = address.clone();
+                    host.ssh_user = ssh_user.clone();
+                }
+
+                // Persist the new IP to disk
+                if let Some(host_name) = self.config.deployment.hosts.keys().next().cloned() {
+                    let dep_name = self.deployment_name.clone();
+                    let path = format!("hosts.{host_name}.address");
+                    if let Err(e) = crate::config::editor::update_deployment_field(
+                        &dep_name, "deployment", &path, address,
+                    ) {
+                        tracing::error!("Failed to persist discovered IP: {e}");
+                    }
+                }
+
+                // Mark for reconnect so Monitor uses the new IP
+                self.needs_reconnect = true;
+            }
+            BuildEvent::PipelineFinished { success } => {
+                if *success {
+                    tracing::info!("Build pipeline finished — connecting to new host");
+                    // Drop stale connection and connect to the (possibly new) IP
+                    if let Some(host) = self.host.take() {
+                        if let Ok(h) = Arc::try_unwrap(host) {
+                            tokio::spawn(async move {
+                                let _ = h.close().await;
+                            });
+                        }
+                    }
+                    self.status_bar.connected = false;
+                    self.needs_reconnect = false;
+                    self.spawn_connect();
+                }
             }
         }
     }
@@ -593,9 +746,15 @@ impl App {
             match deploy_handle.await {
                 Ok(Ok(())) => {
                     tracing::info!("Deploy pipeline completed successfully");
+                    let _ = tx.send(Event::App(AppEvent::Build(
+                        crate::event::BuildEvent::PipelineFinished { success: true },
+                    )));
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Deploy pipeline failed: {e}");
+                    let _ = tx.send(Event::App(AppEvent::Build(
+                        crate::event::BuildEvent::PipelineFinished { success: false },
+                    )));
                     let _ = tx.send(Event::App(AppEvent::Alert {
                         severity: Severity::Warning,
                         message: format!("Build failed: {e}"),
@@ -603,6 +762,9 @@ impl App {
                 }
                 Err(e) => {
                     tracing::error!("Deploy task panicked: {e}");
+                    let _ = tx.send(Event::App(AppEvent::Build(
+                        crate::event::BuildEvent::PipelineFinished { success: false },
+                    )));
                     let _ = tx.send(Event::App(AppEvent::Alert {
                         severity: Severity::Critical,
                         message: format!("Build task panicked: {e}"),

@@ -25,6 +25,15 @@ pub struct SshHost {
     command_count: AtomicU64,
 }
 
+impl std::fmt::Debug for SshHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshHost")
+            .field("host", &self.host)
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SshHost {
     pub async fn connect(config: &HostConfig) -> Result<Self> {
         let destination = format!("{}@{}", config.ssh_user, config.address);

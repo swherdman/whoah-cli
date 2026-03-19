@@ -26,6 +26,10 @@ impl StatusBarComponent {
         self.connected = true;
     }
 
+    pub fn set_deployment(&mut self, name: &str) {
+        self.deployment_name = name.to_string();
+    }
+
     pub fn render_tab_bar(&self, frame: &mut Frame, area: Rect, active: Screen) {
         let p = Palette::default();
 
@@ -151,12 +155,14 @@ impl StatusBarComponent {
                     ]);
                 } else {
                     spans.extend([
+                        Span::styled("Enter", Style::default().fg(p.green_primary)),
+                        Span::styled(":activate ", Style::default().fg(p.text_secondary)),
+                        Span::styled("e", Style::default().fg(p.green_primary)),
+                        Span::styled(":edit ", Style::default().fg(p.text_secondary)),
                         Span::styled("Tab", Style::default().fg(p.green_primary)),
                         Span::styled(":panels ", Style::default().fg(p.text_secondary)),
                         Span::styled("j/k", Style::default().fg(p.green_primary)),
                         Span::styled(":scroll ", Style::default().fg(p.text_secondary)),
-                        Span::styled("Enter", Style::default().fg(p.green_primary)),
-                        Span::styled(":edit ", Style::default().fg(p.text_secondary)),
                         Span::styled("Esc", Style::default().fg(p.green_primary)),
                         Span::styled(":back  ", Style::default().fg(p.text_secondary)),
                     ]);
