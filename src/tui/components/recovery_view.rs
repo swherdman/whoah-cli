@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::action::Action;
 use crate::ops::recover::{RecoveryEvent, RecoveryStep};
@@ -175,14 +175,12 @@ impl Component for RecoveryView {
         frame.render_widget(block, area);
 
         // Layout: progress (2) | steps (9) | output (rest)
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(2),
-                Constraint::Length(9),
-                Constraint::Min(3),
-            ])
-            .split(inner);
+        let chunks = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(9),
+            Constraint::Min(3),
+        ])
+        .split(inner);
 
         // --- Progress bar ---
         let completed = self.completed_count();
@@ -215,9 +213,7 @@ impl Component for RecoveryView {
             p.yellow_warn
         };
 
-        let progress_area = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
+        let progress_area = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
             .split(chunks[0]);
 
         frame.render_widget(
@@ -288,18 +284,23 @@ impl Component for RecoveryView {
         let output_inner = output_block.inner(chunks[2]);
         frame.render_widget(output_block, chunks[2]);
 
-        let height = output_inner.height as usize;
         let total_lines = self.output_lines.len();
-        let scroll = self.output_scroll as usize;
-        let start = scroll.min(total_lines.saturating_sub(height));
-        let end = (start + height).min(total_lines);
-
-        let visible: Vec<Line> = self.output_lines[start..end]
+        let output_lines: Vec<Line> = self.output_lines
             .iter()
             .map(|l| Line::from(Span::styled(l.as_str(), Style::default().fg(p.text_secondary))))
             .collect();
 
-        frame.render_widget(Paragraph::new(visible), output_inner);
+        frame.render_widget(
+            Paragraph::new(output_lines).scroll((self.output_scroll, 0)),
+            output_inner,
+        );
+
+        // Scrollbar for output pane
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(p.border_default));
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(self.output_scroll as usize);
+        frame.render_stateful_widget(scrollbar, output_inner, &mut scrollbar_state);
 
         // Error display
         if let Some((error, workaround)) = &self.error {

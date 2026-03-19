@@ -213,3 +213,15 @@ pub fn threshold_color(pct: u8, warning: u8, critical: u8, p: &Palette) -> Color
         p.green_primary
     }
 }
+
+/// Format a Duration as a human-readable string (e.g., "1h 02m 45s").
+pub fn format_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 3600 {
+        format!("{}h {:02}m {:02}s", secs / 3600, (secs % 3600) / 60, secs % 60)
+    } else if secs >= 60 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}

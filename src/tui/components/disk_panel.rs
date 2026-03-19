@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::action::Action;
 use crate::config::Thresholds;
@@ -187,7 +187,17 @@ impl Component for DiskPanel {
             }
         }
 
-        let paragraph = Paragraph::new(lines).scroll((self.scroll, 0));
-        frame.render_widget(paragraph, inner);
+        let total_lines = lines.len();
+        frame.render_widget(
+            Paragraph::new(lines).scroll((self.scroll, 0)),
+            inner,
+        );
+
+        // Scrollbar
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(p.border_default));
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(self.scroll as usize);
+        frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
     }
 }

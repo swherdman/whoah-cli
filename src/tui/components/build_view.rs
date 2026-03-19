@@ -1,8 +1,10 @@
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::ops::pipeline::{Phase, Pipeline, StepStatus};
-use crate::tui::theme::{panel_block_accent, render_bar, Palette};
+use crate::tui::theme::{format_duration, panel_block_accent, render_bar, Palette};
+
+use crate::action::Action;
 
 use super::Component;
 
@@ -15,14 +17,6 @@ impl BuildView {
         Self { scroll: 0 }
     }
 
-    pub fn scroll_up(&mut self) {
-        self.scroll = self.scroll.saturating_sub(1);
-    }
-
-    pub fn scroll_down(&mut self) {
-        self.scroll = self.scroll.saturating_add(1);
-    }
-
     pub fn render_pipeline(&self, frame: &mut Frame, area: Rect, pipeline: &Pipeline) {
         let p = Palette::default();
         let block = panel_block_accent("Build Pipeline", &p);
@@ -30,14 +24,12 @@ impl BuildView {
         frame.render_widget(block, area);
 
         // Layout: progress bar (2) | step list (rest) | log pane (6)
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(2),
-                Constraint::Min(6),
-                Constraint::Length(6),
-            ])
-            .split(inner);
+        let chunks = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(6),
+            Constraint::Length(6),
+        ])
+        .split(inner);
 
         self.render_progress(frame, chunks[0], pipeline, &p);
         self.render_steps(frame, chunks[1], pipeline, &p);
@@ -85,9 +77,7 @@ impl BuildView {
             format!("0/{total} steps — ready")
         };
 
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
             .split(area);
 
         frame.render_widget(
@@ -132,13 +122,18 @@ impl BuildView {
             lines.push(Line::from(""));
         }
 
-        // Apply scroll
-        let height = area.height as usize;
-        let max_scroll = lines.len().saturating_sub(height);
-        let scroll = (self.scroll as usize).min(max_scroll);
-        let visible: Vec<Line> = lines.into_iter().skip(scroll).take(height).collect();
+        let total_lines = lines.len();
+        frame.render_widget(
+            Paragraph::new(lines).scroll((self.scroll, 0)),
+            area,
+        );
 
-        frame.render_widget(Paragraph::new(visible), area);
+        // Scrollbar
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(p.border_default));
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(self.scroll as usize);
+        frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
     }
 
     fn phase_header_line<'a>(&self, phase: &Phase, p: &Palette) -> Line<'a> {
@@ -267,6 +262,14 @@ impl BuildView {
 }
 
 impl Component for BuildView {
+    fn update(&mut self, action: &Action) {
+        match action {
+            Action::ScrollUp => self.scroll = self.scroll.saturating_sub(1),
+            Action::ScrollDown => self.scroll = self.scroll.saturating_add(1),
+            _ => {}
+        }
+    }
+
     fn render(&self, frame: &mut Frame, area: Rect) {
         // Fallback: render without pipeline (shouldn't normally be called)
         let p = Palette::default();
@@ -278,16 +281,5 @@ impl Component for BuildView {
                 .style(Style::default().fg(p.text_tertiary)),
             inner,
         );
-    }
-}
-
-fn format_duration(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs >= 3600 {
-        format!("{}h {:02}m {:02}s", secs / 3600, (secs % 3600) / 60, secs % 60)
-    } else if secs >= 60 {
-        format!("{}m {:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{}s", secs)
     }
 }

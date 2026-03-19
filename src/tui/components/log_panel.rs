@@ -1,27 +1,20 @@
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::Block;
+use tui_logger::{TuiLoggerWidget, TuiWidgetState};
 
-use crate::tui::theme::{self, Palette};
+use crate::tui::theme::Palette;
 
 use super::Component;
 
 pub struct LogPanel {
-    messages: Vec<String>,
-    max_messages: usize,
+    state: TuiWidgetState,
 }
 
 impl LogPanel {
     pub fn new() -> Self {
         Self {
-            messages: Vec::new(),
-            max_messages: 200,
-        }
-    }
-
-    pub fn push(&mut self, message: String) {
-        self.messages.push(message);
-        if self.messages.len() > self.max_messages {
-            self.messages.remove(0);
+            state: TuiWidgetState::new()
+                .set_default_display_level(log::LevelFilter::Info),
         }
     }
 }
@@ -29,17 +22,27 @@ impl LogPanel {
 impl Component for LogPanel {
     fn render(&self, frame: &mut Frame, area: Rect) {
         let p = Palette::default();
-        let block = theme::panel_block("Logs", false, &p);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
 
-        let height = inner.height as usize;
-        let start = self.messages.len().saturating_sub(height);
-        let visible: Vec<Line> = self.messages[start..]
-            .iter()
-            .map(|m| Line::from(Span::styled(m.as_str(), Style::default().fg(p.text_tertiary))))
-            .collect();
+        let widget = TuiLoggerWidget::default()
+            .block(
+                Block::bordered()
+                    .title(" LOGS ")
+                    .border_style(Style::default().fg(p.border_default))
+                    .title_style(Style::default().fg(p.text_tertiary))
+                    .style(Style::default().bg(p.bg_panel))
+                    .padding(ratatui::widgets::Padding::new(1, 1, 0, 0)),
+            )
+            .style(Style::default().fg(p.text_tertiary))
+            .style_error(Style::default().fg(p.red_error))
+            .style_warn(Style::default().fg(p.yellow_warn))
+            .style_info(Style::default().fg(p.text_default))
+            .style_debug(Style::default().fg(p.text_disabled))
+            .style_trace(Style::default().fg(p.text_disabled))
+            .output_target(false)
+            .output_file(false)
+            .output_line(false)
+            .state(&self.state);
 
-        frame.render_widget(Paragraph::new(visible), inner);
+        frame.render_widget(widget, area);
     }
 }

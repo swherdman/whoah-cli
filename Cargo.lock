@@ -1873,19 +1873,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "tui-logger"
-version = "0.13.2"
+name = "tui-input"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "618b8256e4b8f2abf852121f2d72f9d0e7f091a6456e46d0e786b640e86ad130"
+checksum = "e5d1733c47f1a217b7deff18730ff7ca4ecafc5771368f715ab072d679a36114"
+dependencies = [
+ "ratatui 0.29.0",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "tui-logger"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3fb54e48fa37d5081603f7804c730734b381235ebd876cb1e66f853a7d2533"
 dependencies = [
  "chrono",
  "fxhash",
  "lazy_static",
  "log",
  "parking_lot",
- "ratatui 0.28.1",
+ "ratatui 0.29.0",
  "tracing",
  "tracing-subscriber",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -2112,6 +2123,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tui-input",
  "tui-logger",
 ]
 

@@ -1,6 +1,12 @@
-use ratatui::prelude::*;
-use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use std::cell::Cell;
 
+use crossterm::event::Event as CtEvent;
+use ratatui::prelude::*;
+use ratatui::widgets::{List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
+
+use super::Component;
 use crate::config::editor::update_deployment_field;
 use crate::config::loader::{
     list_deployments, list_hypervisors, load_deployment, load_deployment_state, load_hypervisor,
@@ -20,10 +26,9 @@ pub enum ConfigFocus {
     RightPanel,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum EditMode {
     Viewing,
-    Editing { buffer: String, cursor: usize },
+    Editing { input: Input },
 }
 
 /// Identifies a field's location in the TOML files for editing.
@@ -71,6 +76,9 @@ pub struct ConfigView {
     selected_line: usize,
     scroll_offset: usize,
     edit_mode: EditMode,
+
+    // Tracks right panel height from last render for scroll calculations
+    visible_height: Cell<usize>,
 }
 
 impl ConfigView {
@@ -93,6 +101,7 @@ impl ConfigView {
             selected_line: 0,
             scroll_offset: 0,
             edit_mode: EditMode::Viewing,
+            visible_height: Cell::new(0),
         };
 
         if !view.deployments.is_empty() {
@@ -398,6 +407,10 @@ impl ConfigView {
         if self.selected_line < self.scroll_offset {
             self.scroll_offset = self.selected_line;
         }
+        let h = self.visible_height.get();
+        if h > 0 && self.selected_line >= self.scroll_offset + h {
+            self.scroll_offset = self.selected_line - h + 1;
+        }
     }
 
     fn left_panel_up(&mut self) {
@@ -478,11 +491,8 @@ impl ConfigView {
         if let Some(line) = self.detail_lines.get(self.selected_line) {
             if line.field.is_some() {
                 let value = line.raw_value.clone().unwrap_or_default();
-                let cursor = value.chars().count();
-                self.edit_mode = EditMode::Editing {
-                    buffer: value,
-                    cursor,
-                };
+                let input = Input::new(value);
+                self.edit_mode = EditMode::Editing { input };
             }
         }
     }
@@ -494,10 +504,10 @@ impl ConfigView {
     /// Confirm the edit, persist to disk, reload. Returns Ok(()) on success,
     /// or Err(message) if the save failed.
     pub fn confirm_edit(&mut self) -> Result<(), String> {
-        let EditMode::Editing { ref buffer, .. } = self.edit_mode else {
+        let EditMode::Editing { ref input } = self.edit_mode else {
             return Ok(());
         };
-        let new_value = buffer.clone();
+        let new_value = input.value().to_string();
         self.edit_mode = EditMode::Viewing;
 
         let Some(name) = &self.active_name else { return Ok(()) };
@@ -522,72 +532,23 @@ impl ConfigView {
         Ok(())
     }
 
-    // Cursor is a *char index* (not byte index) for UTF-8 safety.
-    // Use `char_to_byte()` to convert to byte offset for slicing.
-
-    pub fn edit_insert_char(&mut self, c: char) {
-        if let EditMode::Editing { ref mut buffer, ref mut cursor } = self.edit_mode {
-            let byte_pos = char_to_byte(buffer, *cursor);
-            buffer.insert(byte_pos, c);
-            *cursor += 1;
+    /// Forward a crossterm event to the tui-input handler.
+    pub fn handle_edit_event(&mut self, event: &CtEvent) {
+        if let EditMode::Editing { ref mut input } = self.edit_mode {
+            input.handle_event(event);
         }
     }
 
-    pub fn edit_backspace(&mut self) {
-        if let EditMode::Editing { ref mut buffer, ref mut cursor } = self.edit_mode {
-            if *cursor > 0 {
-                *cursor -= 1;
-                let byte_pos = char_to_byte(buffer, *cursor);
-                buffer.remove(byte_pos);
-            }
-        }
-    }
-
-    pub fn edit_delete(&mut self) {
-        if let EditMode::Editing { ref mut buffer, ref cursor } = self.edit_mode {
-            let char_count = buffer.chars().count();
-            if *cursor < char_count {
-                let byte_pos = char_to_byte(buffer, *cursor);
-                buffer.remove(byte_pos);
-            }
-        }
-    }
-
-    pub fn edit_move_left(&mut self) {
-        if let EditMode::Editing { ref mut cursor, .. } = self.edit_mode {
-            *cursor = cursor.saturating_sub(1);
-        }
-    }
-
-    pub fn edit_move_right(&mut self) {
-        if let EditMode::Editing { ref buffer, ref mut cursor } = self.edit_mode {
-            let char_count = buffer.chars().count();
-            if *cursor < char_count {
-                *cursor += 1;
-            }
-        }
-    }
-
-    pub fn edit_home(&mut self) {
-        if let EditMode::Editing { ref mut cursor, .. } = self.edit_mode {
-            *cursor = 0;
-        }
-    }
-
-    pub fn edit_end(&mut self) {
-        if let EditMode::Editing { ref buffer, ref mut cursor } = self.edit_mode {
-            *cursor = buffer.chars().count();
-        }
+    pub fn is_right_panel_focused(&self) -> bool {
+        self.focus == ConfigFocus::RightPanel
     }
 
     // --- Rendering ---
 
-    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
+    fn render_impl(&self, frame: &mut Frame, area: Rect) {
         let p = Palette::default();
 
-        let layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(24), Constraint::Min(40)])
+        let layout = Layout::horizontal([Constraint::Length(24), Constraint::Min(40)])
             .split(area);
 
         self.render_left_panel(frame, layout[0], &p);
@@ -602,34 +563,28 @@ impl ConfigView {
 
         let has_hypervisors = !self.hypervisors.is_empty();
         let sections = if has_hypervisors {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(4), Constraint::Length(1), Constraint::Min(3)])
+            Layout::vertical([Constraint::Min(4), Constraint::Length(1), Constraint::Min(3)])
                 .split(inner)
         } else {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(4), Constraint::Length(0), Constraint::Length(0)])
+            Layout::vertical([Constraint::Min(4), Constraint::Length(0), Constraint::Length(0)])
                 .split(inner)
         };
 
         let items: Vec<ListItem> = self
             .deployments
             .iter()
-            .enumerate()
-            .map(|(i, name)| {
-                let selected = self.section == ConfigSection::Deployments
-                    && self.deployment_list_state.selected() == Some(i);
-                let marker = if selected { " > " } else { "   " };
-                let style = if selected {
-                    Style::default().fg(p.green_primary).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(p.text_default)
-                };
-                ListItem::new(format!("{marker}{name}")).style(style)
-            })
+            .map(|name| ListItem::new(name.as_str()).style(Style::default().fg(p.text_default)))
             .collect();
-        frame.render_widget(List::new(items), sections[0]);
+        let deploy_list = List::new(items)
+            .highlight_style(Style::default().fg(p.green_primary).add_modifier(Modifier::BOLD))
+            .highlight_symbol(" > ")
+            .highlight_spacing(ratatui::widgets::HighlightSpacing::Always);
+        if self.section == ConfigSection::Deployments {
+            let mut state = self.deployment_list_state.clone();
+            frame.render_stateful_widget(deploy_list, sections[0], &mut state);
+        } else {
+            frame.render_widget(deploy_list, sections[0]);
+        }
 
         if has_hypervisors {
             frame.render_widget(
@@ -644,24 +599,22 @@ impl ConfigView {
             let hyp_items: Vec<ListItem> = self
                 .hypervisors
                 .iter()
-                .enumerate()
-                .map(|(i, name)| {
-                    let selected = self.section == ConfigSection::Hypervisors
-                        && self.hypervisor_list_state.selected() == Some(i);
-                    let marker = if selected { " > " } else { "   " };
-                    let style = if selected {
-                        Style::default().fg(p.green_primary)
-                    } else {
-                        Style::default().fg(p.text_tertiary)
-                    };
-                    ListItem::new(format!("{marker}{name}")).style(style)
-                })
+                .map(|name| ListItem::new(name.as_str()).style(Style::default().fg(p.text_tertiary)))
                 .collect();
-            frame.render_widget(List::new(hyp_items), sections[2]);
+            let hyp_list = List::new(hyp_items)
+                .highlight_style(Style::default().fg(p.green_primary))
+                .highlight_symbol(" > ")
+                .highlight_spacing(ratatui::widgets::HighlightSpacing::Always);
+            if self.section == ConfigSection::Hypervisors {
+                let mut state = self.hypervisor_list_state.clone();
+                frame.render_stateful_widget(hyp_list, sections[2], &mut state);
+            } else {
+                frame.render_widget(hyp_list, sections[2]);
+            }
         }
     }
 
-    fn render_right_panel(&mut self, frame: &mut Frame, area: Rect, p: &Palette) {
+    fn render_right_panel(&self, frame: &mut Frame, area: Rect, p: &Palette) {
         let focused = self.focus == ConfigFocus::RightPanel;
         let title = self.active_name.as_deref().unwrap_or("No deployment selected");
         let block = panel_block(title, focused, p);
@@ -677,39 +630,33 @@ impl ConfigView {
             return;
         }
 
-        let visible_height = inner.height as usize;
-
-        // Adjust scroll to keep selected_line visible and persist it
-        self.scroll_offset = if self.selected_line >= self.scroll_offset + visible_height {
-            self.selected_line - visible_height + 1
-        } else if self.selected_line < self.scroll_offset {
-            self.selected_line
-        } else {
-            self.scroll_offset
-        };
+        // Store visible height for scroll calculations in ensure_visible()
+        self.visible_height.set(inner.height as usize);
 
         let lines: Vec<Line> = self
             .detail_lines
             .iter()
             .enumerate()
-            .skip(self.scroll_offset)
-            .take(visible_height)
             .map(|(i, dl)| {
                 let is_selected = i == self.selected_line && self.focus == ConfigFocus::RightPanel;
                 let is_editing = is_selected && matches!(self.edit_mode, EditMode::Editing { .. });
 
                 if is_editing {
-                    if let EditMode::Editing { ref buffer, cursor } = self.edit_mode {
-                        // Render edit line: label + editable buffer with cursor
-                        // cursor is a char index — convert to byte boundaries for slicing
+                    if let EditMode::Editing { ref input } = self.edit_mode {
                         let label = dl.text.split(':').next().unwrap_or("    ?");
-                        let byte_cursor = char_to_byte(buffer, cursor);
-                        let before = &buffer[..byte_cursor];
-                        let cursor_str: String = buffer.chars().nth(cursor)
+                        let value = input.value();
+                        let cursor = input.visual_cursor();
+                        let (before, rest) = value.split_at(
+                            value.char_indices()
+                                .nth(cursor)
+                                .map(|(b, _)| b)
+                                .unwrap_or(value.len()),
+                        );
+                        let cursor_str: String = rest.chars().next()
                             .map(|c| c.to_string())
                             .unwrap_or_else(|| " ".to_string());
-                        let byte_after = char_to_byte(buffer, cursor + 1);
-                        let after = &buffer[byte_after.min(buffer.len())..];
+                        let after_start = cursor_str.len().min(rest.len());
+                        let after = &rest[after_start..];
 
                         return Line::from(vec![
                             Span::styled(format!("{label}: "), Style::default().fg(p.green_primary)),
@@ -744,10 +691,29 @@ impl ConfigView {
             })
             .collect();
 
+        let total_lines = lines.len();
+        let visible_height = inner.height as usize;
         frame.render_widget(
-            Paragraph::new(lines).style(Style::default().bg(p.bg_panel)),
+            Paragraph::new(lines)
+                .style(Style::default().bg(p.bg_panel))
+                .scroll((self.scroll_offset as u16, 0)),
             inner,
         );
+
+        // Only show scrollbar when content overflows
+        if total_lines > visible_height {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .style(Style::default().fg(p.border_default));
+            let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(visible_height))
+                .position(self.scroll_offset);
+            frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
+        }
+    }
+}
+
+impl Component for ConfigView {
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        self.render_impl(frame, area);
     }
 }
 
@@ -793,13 +759,4 @@ fn push_editable(
         }),
         raw_value: Some(value.to_string()),
     });
-}
-
-/// Convert a char index to a byte offset in a string.
-/// Returns `s.len()` if `char_idx` is at or past the end.
-fn char_to_byte(s: &str, char_idx: usize) -> usize {
-    s.char_indices()
-        .nth(char_idx)
-        .map(|(byte, _)| byte)
-        .unwrap_or(s.len())
 }

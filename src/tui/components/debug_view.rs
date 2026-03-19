@@ -1,10 +1,12 @@
 use std::time::Instant;
 
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::ssh::registry::{self, SessionSnapshot};
-use crate::tui::theme::{panel_block_accent, Palette};
+use crate::tui::theme::{format_duration, panel_block_accent, Palette};
+
+use crate::action::Action;
 
 use super::Component;
 
@@ -39,14 +41,6 @@ impl DebugView {
         }
     }
 
-    pub fn scroll_up(&mut self) {
-        self.scroll = self.scroll.saturating_sub(1);
-    }
-
-    pub fn scroll_down(&mut self) {
-        self.scroll = self.scroll.saturating_add(1);
-    }
-
     /// Refresh all debug data. Call this from the app on tick or manual refresh.
     pub fn refresh(&mut self) {
         self.sessions = registry::all();
@@ -64,6 +58,14 @@ impl DebugView {
 }
 
 impl Component for DebugView {
+    fn update(&mut self, action: &Action) {
+        match action {
+            Action::ScrollUp => self.scroll = self.scroll.saturating_sub(1),
+            Action::ScrollDown => self.scroll = self.scroll.saturating_add(1),
+            _ => {}
+        }
+    }
+
     fn render(&self, frame: &mut Frame, area: Rect) {
         let p = Palette::default();
         let block = panel_block_accent("Debug", &p);
@@ -201,10 +203,11 @@ impl Component for DebugView {
             )));
         } else {
             for m in &self.mux_masters {
-                lines.push(Line::from(Span::styled(
-                    format!("    PID {}  {}  {}", m.pid, m.destination, m.control_persist),
-                    Style::default().fg(p.text_secondary),
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled(format!("    {:<10}", m.pid), Style::default().fg(p.text_secondary)),
+                    Span::styled(format!("{:<28}", m.destination), Style::default().fg(p.text_default)),
+                    Span::styled(m.control_persist.clone(), Style::default().fg(p.text_tertiary)),
+                ]));
             }
         }
         lines.push(Line::from(""));
@@ -224,6 +227,12 @@ impl Component for DebugView {
                 Style::default().fg(p.text_disabled),
             )));
         } else {
+            // Header row
+            lines.push(Line::from(vec![
+                Span::styled(format!("    {:<24}", "NAME"), Style::default().fg(p.text_tertiary)),
+                Span::styled(format!("{:<20}", "STATUS"), Style::default().fg(p.text_tertiary)),
+                Span::styled("PORTS", Style::default().fg(p.text_tertiary)),
+            ]));
             for c in &self.containers {
                 let status_color = if c.status.contains("Up") {
                     p.green_primary
@@ -238,13 +247,18 @@ impl Component for DebugView {
             }
         }
 
-        // Apply scroll
-        let height = inner.height as usize;
-        let max_scroll = lines.len().saturating_sub(height);
-        let scroll = (self.scroll as usize).min(max_scroll);
-        let visible: Vec<Line> = lines.into_iter().skip(scroll).take(height).collect();
+        let total_lines = lines.len();
+        frame.render_widget(
+            Paragraph::new(lines).scroll((self.scroll, 0)),
+            inner,
+        );
 
-        frame.render_widget(Paragraph::new(visible), inner);
+        // Scrollbar
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(p.border_default));
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(self.scroll as usize);
+        frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
     }
 }
 
@@ -319,15 +333,4 @@ fn gather_containers() -> Vec<ContainerInfo> {
             }
         })
         .collect()
-}
-
-fn format_duration(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs >= 3600 {
-        format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
-    } else if secs >= 60 {
-        format!("{}m {:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{}s", secs)
-    }
 }

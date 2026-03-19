@@ -100,7 +100,7 @@ impl App {
         tui.enter()?;
 
         self.app_event_tx = Some(tui.event_tx());
-        self.log("Starting whoah dashboard...");
+        tracing::info!("Starting whoah dashboard...");
 
         // Connect to host
         self.connect().await;
@@ -146,24 +146,21 @@ impl App {
         let host_config = match self.config.deployment.hosts.values().next() {
             Some(h) => h.clone(),
             None => {
-                self.log("ERROR: No hosts configured");
+                tracing::error!("No hosts configured");
                 return;
             }
         };
 
-        self.log(&format!(
-            "Connecting to {}@{}...",
-            host_config.ssh_user, host_config.address
-        ));
+        tracing::info!("Connecting to {}@{}...", host_config.ssh_user, host_config.address);
 
         match SshHost::connect(&host_config).await {
             Ok(host) => {
                 self.status_bar.set_connected(&host_config.address);
-                self.log(&format!("Connected to {}", host_config.address));
+                tracing::info!("Connected to {}", host_config.address);
                 self.host = Some(Arc::new(host));
             }
             Err(e) => {
-                self.log(&format!("Connection failed: {e}"));
+                tracing::error!("Connection failed: {e}");
                 self.alert_bar.set_alert(
                     Severity::Critical,
                     format!("SSH connection failed: {e}"),
@@ -241,39 +238,22 @@ impl App {
             },
             Screen::Config => {
                 if self.config_view.is_editing() {
-                    // Edit mode: all keys go to the editor
+                    // Edit mode: Enter/Esc handled here, everything else goes to tui-input
                     match key.code {
                         KeyCode::Enter => {
                             match self.config_view.confirm_edit() {
-                                Ok(()) => self.log("Config field updated"),
-                                Err(msg) => self.log(&format!("ERROR: {msg}")),
+                                Ok(()) => tracing::info!("Config field updated"),
+                                Err(msg) => tracing::error!("{msg}"),
                             }
                         }
                         KeyCode::Esc => {
                             self.config_view.cancel_edit();
                         }
-                        KeyCode::Backspace => {
-                            self.config_view.edit_backspace();
+                        _ => {
+                            self.config_view.handle_edit_event(
+                                &ratatui::crossterm::event::Event::Key(key),
+                            );
                         }
-                        KeyCode::Delete => {
-                            self.config_view.edit_delete();
-                        }
-                        KeyCode::Left => {
-                            self.config_view.edit_move_left();
-                        }
-                        KeyCode::Right => {
-                            self.config_view.edit_move_right();
-                        }
-                        KeyCode::Home => {
-                            self.config_view.edit_home();
-                        }
-                        KeyCode::End => {
-                            self.config_view.edit_end();
-                        }
-                        KeyCode::Char(c) => {
-                            self.config_view.edit_insert_char(c);
-                        }
-                        _ => {}
                     }
                     return None;
                 }
@@ -281,7 +261,7 @@ impl App {
                 match key.code {
                     KeyCode::Char('q') => Some(Action::Quit),
                     KeyCode::Esc => {
-                        if self.config_view.focus == crate::tui::components::config_view::ConfigFocus::RightPanel {
+                        if self.config_view.is_right_panel_focused() {
                             self.config_view.toggle_focus();
                             None
                         } else {
@@ -329,17 +309,13 @@ impl App {
             Action::SwitchScreen(screen) => {
                 self.screen = screen;
             }
-            Action::FocusNext => {
+            Action::FocusNext | Action::FocusPrev => {
                 self.focused = match self.focused {
                     FocusedPanel::Status => FocusedPanel::Disk,
                     FocusedPanel::Disk => FocusedPanel::Status,
                 };
-            }
-            Action::FocusPrev => {
-                self.focused = match self.focused {
-                    FocusedPanel::Status => FocusedPanel::Disk,
-                    FocusedPanel::Disk => FocusedPanel::Status,
-                };
+                self.status_panel.set_focused(self.focused == FocusedPanel::Status);
+                self.disk_panel.set_focused(self.focused == FocusedPanel::Disk);
             }
             Action::ScrollUp | Action::ScrollDown => {
                 match self.screen {
@@ -350,34 +326,26 @@ impl App {
                             FocusedPanel::Disk => self.disk_panel.update(&action),
                         },
                     },
-                    Screen::Build => match action {
-                        Action::ScrollUp => self.build_view.scroll_up(),
-                        Action::ScrollDown => self.build_view.scroll_down(),
-                        _ => {}
-                    },
+                    Screen::Build => self.build_view.update(&action),
                     Screen::Config => {}
-                    Screen::Debug => match action {
-                        Action::ScrollUp => self.debug_view.scroll_up(),
-                        Action::ScrollDown => self.debug_view.scroll_down(),
-                        _ => {}
-                    },
+                    Screen::Debug => self.debug_view.update(&action),
                 }
             }
             Action::RefreshStatus => {
-                self.log("Manual status refresh...");
+                tracing::info!("Manual status refresh...");
                 self.spawn_status_poll();
             }
             Action::StartBuild => {
                 if self.pipeline.started.is_some() {
-                    self.log("Build already in progress");
+                    tracing::info!("Build already in progress");
                 } else {
-                    self.log("Starting build pipeline...");
+                    tracing::info!("Starting build pipeline...");
                     self.screen = Screen::Build;
                     self.spawn_build();
                 }
             }
             Action::StartRecovery => {
-                self.log("Starting recovery...");
+                tracing::info!("Starting recovery...");
                 self.screen = Screen::Monitor;
                 self.monitor_mode = MonitorMode::Recovery;
                 self.recovery_view.start();
@@ -388,20 +356,20 @@ impl App {
                 // Log key events
                 match event {
                     RecoveryEvent::StepCompleted(step, dur) => {
-                        self.log(&format!(
+                        tracing::info!(
                             "Recovery: {} completed ({:.1}s)",
                             step.label(),
                             dur.as_secs_f64()
-                        ));
+                        );
                     }
                     RecoveryEvent::StepFailed { step, error, .. } => {
-                        self.log(&format!("Recovery: {} FAILED: {}", step.label(), error));
+                        tracing::error!("Recovery: {} FAILED: {}", step.label(), error);
                     }
                     RecoveryEvent::RecoveryComplete(dur) => {
-                        self.log(&format!(
+                        tracing::info!(
                             "Recovery complete in {:.0}s",
                             dur.as_secs_f64()
-                        ));
+                        );
                         // Trigger a status refresh after recovery
                         self.spawn_status_poll();
                     }
@@ -437,11 +405,11 @@ impl App {
                     }
                 }
 
-                self.log(&format!(
+                tracing::info!(
                     "Status: {} zones, rpool {}%",
                     status.zones.service_counts.values().sum::<u32>(),
                     status.disk.rpool.as_ref().map(|r| r.capacity_pct).unwrap_or(0),
-                ));
+                );
             }
             _ => {}
         }
@@ -472,7 +440,7 @@ impl App {
                     .and_then(|(pi, si)| Some(self.pipeline.phases[pi].steps[si].name))
                     .unwrap_or("unknown");
                 self.pipeline.start_step(id);
-                self.log(&format!("Build: starting {name}"));
+                tracing::info!("Build: starting {name}");
             }
             BuildEvent::StepDetail(id, detail) => {
                 self.pipeline.update_step_detail(id, detail.clone());
@@ -485,11 +453,11 @@ impl App {
                 let dur = self.pipeline.step_mut(id)
                     .and_then(|s| s.elapsed())
                     .unwrap_or_default();
-                self.log(&format!("Build: {name} completed ({:.1}s)", dur.as_secs_f64()));
+                tracing::info!("Build: {name} completed ({:.1}s)", dur.as_secs_f64());
             }
             BuildEvent::StepFailed(id, error) => {
                 self.pipeline.fail_step(id, error.clone());
-                self.log(&format!("Build: FAILED — {error}"));
+                tracing::error!("Build: FAILED — {error}");
             }
         }
     }
@@ -506,6 +474,11 @@ impl App {
 
         if should_poll {
             self.spawn_status_poll();
+        }
+
+        // Refresh debug data on tick (not in render path — avoids blocking I/O)
+        if self.screen == Screen::Debug && self.debug_view.needs_refresh() {
+            self.debug_view.refresh();
         }
     }
 
@@ -539,7 +512,7 @@ impl App {
 
     fn spawn_recovery(&mut self) {
         let Some(host) = self.host.clone() else {
-            self.log("Cannot start recovery: not connected");
+            tracing::warn!("Cannot start recovery: not connected");
             self.monitor_mode = MonitorMode::Dashboard;
             self.recovery_view.deactivate();
             return;
@@ -551,7 +524,7 @@ impl App {
         let params = match RecoveryParams::from_config(&self.config) {
             Ok(p) => p,
             Err(e) => {
-                self.log(&format!("Cannot start recovery: {e}"));
+                tracing::error!("Cannot start recovery: {e}");
                 self.monitor_mode = MonitorMode::Dashboard;
                 self.recovery_view.deactivate();
                 return;
@@ -596,7 +569,7 @@ impl App {
         let has_proxmox = self.config.deployment.proxmox.is_some()
             || self.config.deployment.hypervisor.is_some();
         if !has_proxmox {
-            self.log("Cannot build: no [proxmox] or [hypervisor] section in config");
+            tracing::warn!("Cannot build: no [proxmox] or [hypervisor] section in config");
             return;
         }
 
@@ -649,14 +622,12 @@ impl App {
         );
 
         // Common chrome: tab bar (top) + keybindings (bottom)
-        let chrome = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // tab bar
-                Constraint::Min(5),    // screen content
-                Constraint::Length(1), // keybindings
-            ])
-            .split(frame.area());
+        let chrome = Layout::vertical([
+            Constraint::Length(1), // tab bar
+            Constraint::Min(5),    // screen content
+            Constraint::Length(1), // keybindings
+        ])
+        .split(frame.area());
 
         self.status_bar.render_tab_bar(frame, chrome[0], self.screen);
         let config_editing = self.screen == Screen::Config && self.config_view.is_editing();
@@ -669,9 +640,6 @@ impl App {
             Screen::Config => self.render_config(frame, chrome[1]),
             Screen::Monitor => self.render_monitor(frame, chrome[1]),
             Screen::Debug => {
-                if self.debug_view.needs_refresh() {
-                    self.debug_view.refresh();
-                }
                 self.debug_view.render(frame, chrome[1]);
             }
         }
@@ -682,7 +650,7 @@ impl App {
             .render_pipeline(frame, area, &self.pipeline);
     }
 
-    fn render_config(&mut self, frame: &mut Frame, area: Rect) {
+    fn render_config(&self, frame: &mut Frame, area: Rect) {
         self.config_view.render(frame, area);
     }
 
@@ -694,12 +662,6 @@ impl App {
     }
 
     fn render_dashboard(&mut self, frame: &mut Frame, area: Rect) {
-        // Update focus state on panels
-        self.status_panel
-            .set_focused(self.focused == FocusedPanel::Status);
-        self.disk_panel
-            .set_focused(self.focused == FocusedPanel::Disk);
-
         let areas = dashboard_layout(area);
 
         // Alert or status info
@@ -739,11 +701,5 @@ impl App {
 
     fn render_recovery(&self, frame: &mut Frame, area: Rect) {
         self.recovery_view.render(frame, area);
-    }
-
-    fn log(&mut self, message: &str) {
-        let timestamp = chrono::Local::now().format("%H:%M:%S");
-        self.log_panel.push(format!("[{timestamp}] {message}"));
-        tracing::info!("{message}");
     }
 }
