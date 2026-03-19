@@ -1,3 +1,4 @@
+pub mod dladm;
 pub mod disk;
 pub mod network;
 pub mod services;

@@ -604,7 +604,7 @@ mod tests {
     use super::*;
     use crate::config::types::*;
     use crate::ssh::mock::MockHost;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn sample_config() -> DeploymentConfig {
         DeploymentConfig {
@@ -614,13 +614,14 @@ mod tests {
                     description: None,
                 },
                 hosts: {
-                    let mut h = HashMap::new();
+                    let mut h = BTreeMap::new();
                     h.insert(
                         "helios01".to_string(),
                         HostConfig {
                             address: "192.168.2.209".to_string(),
                             ssh_user: "testuser".to_string(),
                             role: HostRole::Combined,
+                            host_type: None,
                         },
                     );
                     h
@@ -640,6 +641,7 @@ mod tests {
                 },
                 nexus: NexusConfig::default(),
                 proxmox: None,
+                hypervisor: None,
             },
             build: BuildToml {
                 omicron: OmicronBuildConfig {

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod init;
+pub mod migrate;
 pub mod recover;
 pub mod status;
 
@@ -30,6 +31,8 @@ pub enum Command {
     Init(InitArgs),
     /// Configuration management
     Config(ConfigArgs),
+    /// Rename a deployment
+    Migrate(MigrateArgs),
 }
 
 #[derive(Args)]
@@ -43,6 +46,14 @@ pub struct InitArgs {
 pub struct ConfigArgs {
     #[command(subcommand)]
     pub command: ConfigCommand,
+}
+
+#[derive(Args)]
+pub struct MigrateArgs {
+    /// Current deployment name
+    pub old_name: String,
+    /// New deployment name
+    pub new_name: String,
 }
 
 #[derive(Subcommand)]

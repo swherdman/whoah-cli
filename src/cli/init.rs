@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use color_eyre::{eyre::eyre, Result};
 use dialoguer::{Confirm, Input};
@@ -39,6 +39,7 @@ async fn run_import(host_str: &str) -> Result<()> {
         address: address.clone(),
         ssh_user: ssh_user.clone(),
         role: HostRole::Combined,
+        host_type: None,
     };
     let host = SshHost::connect(&host_config).await?;
 
@@ -192,13 +193,14 @@ async fn run_wizard() -> Result<()> {
                 description: Some("Created by whoah init".to_string()),
             },
             hosts: {
-                let mut h = HashMap::new();
+                let mut h = BTreeMap::new();
                 h.insert(
                     "helios01".to_string(),
                     HostConfig {
                         address,
                         ssh_user,
                         role: HostRole::Combined,
+                        host_type: None,
                     },
                 );
                 h
@@ -221,10 +223,13 @@ async fn run_wizard() -> Result<()> {
             },
             nexus: NexusConfig::default(),
             proxmox: None,
+            hypervisor: None,
         },
         build: BuildToml {
             omicron: OmicronBuildConfig {
                 repo_path: "~/omicron".to_string(),
+                repo_url: None,
+                git_ref: None,
                 rust_toolchain: Some("1.91.1".to_string()),
                 overrides: OmicronOverrides {
                     cockroachdb_redundancy: Some(crdb_redundancy),
@@ -262,13 +267,14 @@ fn build_config_from_discovered(
                 description: Some(format!("Imported from {address}")),
             },
             hosts: {
-                let mut h = HashMap::new();
+                let mut h = BTreeMap::new();
                 h.insert(
                     "helios01".to_string(),
                     HostConfig {
                         address: address.to_string(),
                         ssh_user: ssh_user.to_string(),
                         role: HostRole::Combined,
+                        host_type: None,
                     },
                 );
                 h
@@ -276,10 +282,13 @@ fn build_config_from_discovered(
             network: discovered.network.clone(),
             nexus: NexusConfig::default(),
             proxmox: None,
+            hypervisor: None,
         },
         build: BuildToml {
             omicron: OmicronBuildConfig {
                 repo_path: discovered.omicron_path.clone(),
+                repo_url: None,
+                git_ref: None,
                 rust_toolchain: Some("1.91.1".to_string()),
                 overrides: OmicronOverrides {
                     cockroachdb_redundancy: discovered.cockroachdb_redundancy,

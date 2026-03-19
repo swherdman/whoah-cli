@@ -10,6 +10,7 @@ use color_eyre::{eyre::eyre, Result};
 use tokio::sync::mpsc;
 
 use crate::config::{DeploymentConfig, HostConfig, ProxmoxConfig};
+use crate::config::loader::resolve_proxmox_config;
 use crate::event::BuildEvent;
 use crate::ops::proxmox;
 use crate::ops::serial::SerialConsole;
@@ -22,17 +23,17 @@ pub async fn run_deploy(
     config: DeploymentConfig,
     tx: mpsc::UnboundedSender<BuildEvent>,
 ) -> Result<()> {
-    let proxmox_config = config
-        .deployment
-        .proxmox
+    let resolved_proxmox = resolve_proxmox_config(&config.deployment)?;
+    let proxmox_config = resolved_proxmox
         .as_ref()
-        .ok_or_else(|| eyre!("No [proxmox] config in deployment.toml"))?;
+        .ok_or_else(|| eyre!("No proxmox config found (check [proxmox] or [hypervisor] section)"))?;
 
     // Connect to Proxmox host
     let pve_host_config = HostConfig {
         address: proxmox_config.host.clone(),
         ssh_user: proxmox_config.ssh_user.clone(),
         role: crate::config::HostRole::Combined,
+        host_type: None,
     };
     let pve = SshHost::connect(&pve_host_config).await?;
 
@@ -371,13 +372,35 @@ async fn run_provision(
         BuildEvent::StepDetail("prov-network".into(), "Configuring network interface...".into()),
     );
 
-    console.send("ipadm create-if e1000g0").await?;
+    // Discover NIC name dynamically via dladm
+    console.send("dladm show-ether -p -o LINK").await?;
+    let mut nic_lines = Vec::new();
+    console
+        .wait_for(
+            Duration::from_secs(10),
+            |line| nic_lines.push(line.to_string()),
+            |line| line.trim().ends_with('#'),
+        )
+        .await?;
+    let nic_output = nic_lines.join("\n");
+    let nic_name = crate::parse::dladm::parse_ether_link(&nic_output)
+        .unwrap_or_else(|| "e1000g0".to_string());
+
+    send(
+        tx_ref,
+        BuildEvent::StepDetail(
+            "prov-network".into(),
+            format!("Discovered NIC: {nic_name}"),
+        ),
+    );
+
+    console.send(&format!("ipadm create-if {nic_name}")).await?;
     console
         .wait_for(Duration::from_secs(10), |_| {}, |line| line.trim().ends_with('#'))
         .await?;
 
     console
-        .send(&format!("ipadm create-addr -T dhcp -h {hostname} e1000g0/dhcp"))
+        .send(&format!("ipadm create-addr -T dhcp -h {hostname} {nic_name}/dhcp"))
         .await?;
     console
         .wait_for(Duration::from_secs(10), |_| {}, |line| line.trim().ends_with('#'))
@@ -394,10 +417,10 @@ async fn run_provision(
         BuildEvent::StepDetail("prov-network".into(), "Waiting for DHCP address...".into()),
     );
 
-    // Poll ipadm show-addr until we see an IP on e1000g0
+    // Poll ipadm show-addr until we see an IP on the discovered NIC
     let mut ip_address = String::new();
     for _ in 0..15 {
-        console.send("ipadm show-addr -o ADDR e1000g0/dhcp").await?;
+        console.send(&format!("ipadm show-addr -o ADDR {nic_name}/dhcp")).await?;
         let mut addr_lines = Vec::new();
         console
             .wait_for(
@@ -547,6 +570,7 @@ async fn run_configure_access(
         address: helios_ip.to_string(),
         ssh_user: username.clone(),
         role: crate::config::HostRole::Combined,
+        host_type: None,
     };
 
     let helios = SshHost::connect(&helios_host_config).await.map_err(|e| {
@@ -684,6 +708,7 @@ async fn run_os_setup(
         address: helios_ip.to_string(),
         ssh_user: ssh_user.to_string(),
         role: crate::config::HostRole::Combined,
+        host_type: None,
     };
 
     let log_dir = crate::config::loader::whoah_dir()
@@ -771,6 +796,7 @@ async fn continue_os_setup_after_reboot(
         address: helios_ip.to_string(),
         ssh_user: ssh_user.to_string(),
         role: crate::config::HostRole::Combined,
+        host_type: None,
     };
 
     let helios = DirectSsh::connect(&helios_config).await?;
@@ -897,6 +923,7 @@ async fn run_omicron_build(
         address: helios_ip.to_string(),
         ssh_user: ssh_user.to_string(),
         role: crate::config::HostRole::Combined,
+        host_type: None,
     };
 
     let log_dir = crate::config::loader::whoah_dir()
@@ -924,6 +951,13 @@ async fn run_omicron_build(
     send(tx, BuildEvent::StepStarted("build-clone".into()));
     ssh.detail("Cloning omicron repository...").await;
 
+    let omicron_url = config
+        .build
+        .omicron
+        .repo_url
+        .as_deref()
+        .unwrap_or("https://github.com/oxidecomputer/omicron.git");
+
     let check = ssh.run(&format!("test -d {repo_path}/.git && echo exists")).await?;
     if check.stdout.trim() == "exists" {
         ssh.detail("Omicron repo already exists, pulling latest...").await;
@@ -931,8 +965,14 @@ async fn run_omicron_build(
     } else {
         // Don't proxy git clone — git doesn't trust our self-signed CA
         ssh.run_streaming_check(&format!(
-            "git clone https://github.com/oxidecomputer/omicron.git {repo_path} 2>&1"
+            "git clone {omicron_url} {repo_path} 2>&1"
         )).await?;
+    }
+
+    // Checkout pinned git ref if configured
+    if let Some(ref git_ref) = config.build.omicron.git_ref {
+        ssh.detail(&format!("Checking out {git_ref}...")).await;
+        ssh.run_check(&format!("cd {repo_path} && git checkout {git_ref}")).await?;
     }
 
     send(tx, BuildEvent::StepCompleted("build-clone".into()));
@@ -1124,6 +1164,54 @@ print('Updated vdevs to {vdev_count}')
     ssh.set_step("build-patch-propolis");
     ssh.detail("Checking for patched propolis binary...").await;
 
+    // Check if propolis patching is explicitly disabled
+    let propolis_patched = config
+        .build
+        .propolis
+        .as_ref()
+        .and_then(|p| p.patched)
+        .unwrap_or(true); // default: patch
+
+    let propolis_source = config
+        .build
+        .propolis
+        .as_ref()
+        .and_then(|p| p.source.clone());
+
+    let propolis_repo_url = config
+        .build
+        .propolis
+        .as_ref()
+        .and_then(|p| p.repo_url.as_deref())
+        .unwrap_or("https://github.com/swherdman/propolis");
+
+    let propolis_local_binary = config
+        .build
+        .propolis
+        .as_ref()
+        .and_then(|p| p.local_binary.as_deref());
+
+    if !propolis_patched {
+        ssh.detail("Propolis patching disabled, skipping").await;
+        send(tx, BuildEvent::StepCompleted("build-patch-propolis".into()));
+    } else if matches!(propolis_source, Some(crate::config::PropolisSource::LocalBuild)) {
+        // Use local binary
+        if let Some(local_path) = propolis_local_binary {
+            ssh.detail(&format!("Using local propolis binary: {local_path}")).await;
+            ssh.run_check(&format!(
+                "cd /tmp && mkdir -p propolis-repack && cd propolis-repack && \
+                 tar xzf {repo_path}/out/propolis-server.tar.gz && \
+                 cp {local_path} root/opt/oxide/propolis-server/bin/propolis-server && \
+                 tar czf {repo_path}/out/propolis-server.tar.gz oxide.json root/ && \
+                 cd /tmp && rm -rf propolis-repack"
+            )).await?;
+        } else {
+            ssh.detail("Warning: local-build source but no local_binary path set").await;
+        }
+        send(tx, BuildEvent::StepCompleted("build-patch-propolis".into()));
+    } else {
+    // GitHub release source (default)
+
     // Extract the propolis rev that omicron is pinned to
     // Use grep + sed (not GNU grep -P/-m which isn't available on illumos)
     let propolis_rev = ssh.run(&format!(
@@ -1138,7 +1226,7 @@ print('Updated vdevs to {vdev_count}')
         // Check if the release exists and download
         let download_result = ssh.run(&format!(
             "curl -sfL -o /tmp/propolis-server.gz \
-             https://github.com/swherdman/propolis/releases/download/{release_tag}/propolis-server.gz \
+             {propolis_repo_url}/releases/download/{release_tag}/propolis-server.gz \
              && echo OK || echo MISSING"
         )).await?;
 
@@ -1168,6 +1256,7 @@ print('Updated vdevs to {vdev_count}')
     }
 
     send(tx, BuildEvent::StepCompleted("build-patch-propolis".into()));
+    } // end else (GitHub release path)
 
     // --- Step: Create virtual hardware ---
     send(tx, BuildEvent::StepStarted("build-vhw".into()));
@@ -1379,6 +1468,7 @@ async fn wait_for_ssh(ip: &str, user: &str, timeout: Duration) -> Result<()> {
         address: ip.to_string(),
         ssh_user: user.to_string(),
         role: crate::config::HostRole::Combined,
+        host_type: None,
     };
 
     loop {
@@ -1434,6 +1524,7 @@ async fn run_setup_pkg_cache(
         address: helios_ip.to_string(),
         ssh_user: ssh_user.to_string(),
         role: crate::config::HostRole::Combined,
+        host_type: None,
     };
     let helios = DirectSsh::connect(&helios_config).await.map_err(|e| {
         send(tx, BuildEvent::StepFailed("build-pkg-cache".into(), format!("SSH failed: {e}")));

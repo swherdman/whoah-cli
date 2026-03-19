@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -23,12 +24,14 @@ pub struct DeploymentConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentToml {
     pub deployment: DeploymentMeta,
-    pub hosts: HashMap<String, HostConfig>,
+    pub hosts: BTreeMap<String, HostConfig>,
     pub network: NetworkConfig,
     #[serde(default)]
     pub nexus: NexusConfig,
     #[serde(default)]
     pub proxmox: Option<ProxmoxConfig>,
+    #[serde(default)]
+    pub hypervisor: Option<HypervisorRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +47,8 @@ pub struct HostConfig {
     pub ssh_user: String,
     #[serde(default = "default_role")]
     pub role: HostRole,
+    #[serde(default)]
+    pub host_type: Option<HostType>,
 }
 
 fn default_role() -> HostRole {
@@ -56,6 +61,13 @@ pub enum HostRole {
     ControlPlane,
     Compute,
     Combined,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostType {
+    Vm,
+    BareMetal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +266,84 @@ impl Default for ProxmoxVmConfig {
     }
 }
 
+// --- Shared hypervisor config (~/.whoah/shared/hypervisors/*.toml) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HypervisorType {
+    Proxmox,
+    LinuxKvm,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HypervisorConfig {
+    pub hypervisor: HypervisorMeta,
+    pub credentials: HypervisorCredentials,
+    #[serde(default)]
+    pub proxmox: Option<ProxmoxHypervisorConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HypervisorMeta {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub hypervisor_type: HypervisorType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HypervisorCredentials {
+    pub host: String,
+    pub ssh_user: String,
+}
+
+/// Type-specific Proxmox hypervisor settings (shared across VMs on this host)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxmoxHypervisorConfig {
+    #[serde(default = "default_proxmox_node")]
+    pub node: String,
+    #[serde(default = "default_iso_storage")]
+    pub iso_storage: String,
+    #[serde(default = "default_disk_storage")]
+    pub disk_storage: String,
+    #[serde(default = "default_iso_file")]
+    pub iso_file: String,
+}
+
+// --- Hypervisor reference (per-deployment, points to shared hypervisor) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HypervisorRef {
+    #[serde(rename = "ref")]
+    pub hypervisor_ref: String,
+    #[serde(default)]
+    pub vm: Option<VmConfig>,
+}
+
+/// Per-deployment VM config (resources, identity). Used when host_type = vm.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VmConfig {
+    pub vmid: u32,
+    pub name: String,
+    #[serde(default = "default_cores")]
+    pub cores: u32,
+    #[serde(default = "default_sockets")]
+    pub sockets: u32,
+    #[serde(default = "default_memory_mb")]
+    pub memory_mb: u32,
+    #[serde(default = "default_disk_gb")]
+    pub disk_gb: u32,
+    #[serde(default = "default_disk_bus")]
+    pub disk_bus: String,
+    #[serde(default = "default_cpu_type")]
+    pub cpu_type: String,
+    #[serde(default = "default_os_type")]
+    pub os_type: String,
+    #[serde(default = "default_net_model")]
+    pub net_model: String,
+    #[serde(default = "default_net_bridge")]
+    pub net_bridge: String,
+}
+
 // --- build.toml ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +367,10 @@ pub struct OmicronBuildConfig {
     #[serde(default = "default_omicron_repo_path")]
     pub repo_path: String,
     #[serde(default)]
+    pub repo_url: Option<String>,
+    #[serde(default)]
+    pub git_ref: Option<String>,
+    #[serde(default)]
     pub rust_toolchain: Option<String>,
     #[serde(default)]
     pub overrides: OmicronOverrides,
@@ -290,6 +384,8 @@ impl Default for OmicronBuildConfig {
     fn default() -> Self {
         Self {
             repo_path: default_omicron_repo_path(),
+            repo_url: None,
+            git_ref: None,
             rust_toolchain: None,
             overrides: OmicronOverrides::default(),
         }
@@ -330,10 +426,40 @@ pub struct OmicronOverrides {
 pub struct PropolisBuildConfig {
     #[serde(default = "default_propolis_repo_path")]
     pub repo_path: String,
+    #[serde(default)]
+    pub patched: Option<bool>,
+    #[serde(default)]
+    pub patch_type: Option<String>,
+    #[serde(default)]
+    pub source: Option<PropolisSource>,
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    #[serde(default)]
+    pub local_binary: Option<String>,
 }
 
 fn default_propolis_repo_path() -> String {
     "~/propolis".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PropolisSource {
+    GithubRelease,
+    LocalBuild,
+}
+
+// --- state.toml (per-deployment runtime state) ---
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeploymentState {
+    #[serde(default)]
+    pub drift: Option<DriftState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriftState {
+    pub last_checked: String,
 }
 
 // --- monitoring.toml ---
@@ -456,6 +582,286 @@ mod tests {
     fn test_build_defaults() {
         let b = BuildToml::default();
         assert_eq!(b.omicron.repo_path, "~/omicron");
+        assert!(b.omicron.repo_url.is_none());
+        assert!(b.omicron.git_ref.is_none());
         assert!(b.propolis.is_none());
+    }
+
+    #[test]
+    fn test_hypervisor_type_serialization() {
+        #[derive(Serialize, Deserialize)]
+        struct Wrapper {
+            #[serde(rename = "type")]
+            hypervisor_type: HypervisorType,
+        }
+        let w = Wrapper {
+            hypervisor_type: HypervisorType::LinuxKvm,
+        };
+        let s = toml::to_string(&w).unwrap();
+        assert!(s.contains("linux-kvm"));
+
+        let w2 = Wrapper {
+            hypervisor_type: HypervisorType::Proxmox,
+        };
+        let s2 = toml::to_string(&w2).unwrap();
+        assert!(s2.contains("proxmox"));
+    }
+
+    #[test]
+    fn test_host_type_serialization() {
+        #[derive(Serialize, Deserialize)]
+        struct Wrapper {
+            host_type: HostType,
+        }
+        let w = Wrapper {
+            host_type: HostType::Vm,
+        };
+        let s = toml::to_string(&w).unwrap();
+        assert!(s.contains("vm"));
+
+        let w2 = Wrapper {
+            host_type: HostType::BareMetal,
+        };
+        let s2 = toml::to_string(&w2).unwrap();
+        assert!(s2.contains("bare-metal"));
+    }
+
+    #[test]
+    fn test_propolis_source_serialization() {
+        #[derive(Serialize, Deserialize)]
+        struct Wrapper {
+            source: PropolisSource,
+        }
+        let w = Wrapper {
+            source: PropolisSource::GithubRelease,
+        };
+        let s = toml::to_string(&w).unwrap();
+        assert!(s.contains("github-release"));
+
+        let w2 = Wrapper {
+            source: PropolisSource::LocalBuild,
+        };
+        let s2 = toml::to_string(&w2).unwrap();
+        assert!(s2.contains("local-build"));
+    }
+
+    #[test]
+    fn test_hypervisor_config_roundtrip() {
+        let toml_str = r#"
+[hypervisor]
+name = "proxmox-lab"
+type = "proxmox"
+
+[credentials]
+host = "192.168.2.5"
+ssh_user = "root"
+
+[proxmox]
+node = "PVE"
+iso_storage = "local"
+disk_storage = "local-lvm"
+iso_file = "helios-install-vga.iso"
+"#;
+        let config: HypervisorConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.hypervisor.name, "proxmox-lab");
+        assert_eq!(config.hypervisor.hypervisor_type, HypervisorType::Proxmox);
+        assert_eq!(config.credentials.host, "192.168.2.5");
+        assert_eq!(config.credentials.ssh_user, "root");
+        let px = config.proxmox.clone().unwrap();
+        assert_eq!(px.node, "PVE");
+        assert_eq!(px.iso_file, "helios-install-vga.iso");
+
+        // Roundtrip
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let reparsed: HypervisorConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.hypervisor.name, "proxmox-lab");
+    }
+
+    #[test]
+    fn test_hypervisor_ref_roundtrip() {
+        let toml_str = r#"
+ref = "proxmox-lab"
+
+[vm]
+vmid = 302
+name = "helios02"
+cores = 2
+sockets = 2
+memory_mb = 49152
+disk_gb = 256
+"#;
+        let href: HypervisorRef = toml::from_str(toml_str).unwrap();
+        assert_eq!(href.hypervisor_ref, "proxmox-lab");
+        let vm = href.vm.unwrap();
+        assert_eq!(vm.vmid, 302);
+        assert_eq!(vm.name, "helios02");
+        assert_eq!(vm.cores, 2);
+        assert_eq!(vm.memory_mb, 49152);
+    }
+
+    #[test]
+    fn test_deployment_state_roundtrip() {
+        let state = DeploymentState {
+            drift: Some(DriftState {
+                last_checked: "2026-03-18T14:30:00Z".to_string(),
+            }),
+        };
+        let s = toml::to_string_pretty(&state).unwrap();
+        let parsed: DeploymentState = toml::from_str(&s).unwrap();
+        assert_eq!(
+            parsed.drift.unwrap().last_checked,
+            "2026-03-18T14:30:00Z"
+        );
+
+        // Empty state
+        let empty = DeploymentState::default();
+        assert!(empty.drift.is_none());
+    }
+
+    #[test]
+    fn test_backward_compat_deployment_toml() {
+        // Existing helios-lab deployment.toml must still parse without new fields
+        let toml_str = r#"
+[deployment]
+name = "helios-lab"
+description = "Single-sled Helios on Proxmox"
+
+[hosts.helios01]
+address = "192.168.2.209"
+ssh_user = "swherdman"
+role = "combined"
+
+[network]
+gateway = "192.168.2.1"
+external_dns_ips = ["192.168.2.40", "192.168.2.41"]
+infra_ip = "192.168.2.50"
+internal_services_range = { first = "192.168.2.40", last = "192.168.2.49" }
+instance_pool_range = { first = "192.168.2.51", last = "192.168.2.60" }
+
+[proxmox]
+host = "192.168.2.5"
+ssh_user = "root"
+node = "PVE"
+iso_storage = "local"
+disk_storage = "local-lvm"
+iso_file = "helios-install-vga.iso"
+
+[proxmox.vm]
+vmid = 302
+name = "helios02"
+cores = 2
+sockets = 2
+memory_mb = 49152
+disk_gb = 256
+disk_bus = "sata"
+cpu_type = "host"
+os_type = "solaris"
+net_model = "e1000e"
+net_bridge = "vmbr0"
+"#;
+        let config: DeploymentToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.deployment.name, "helios-lab");
+        assert!(config.hypervisor.is_none()); // new field absent = None
+        let host = config.hosts.get("helios01").unwrap();
+        assert!(host.host_type.is_none()); // new field absent = None
+        assert!(config.proxmox.is_some()); // legacy field still works
+    }
+
+    #[test]
+    fn test_backward_compat_build_toml() {
+        let toml_str = r#"
+[omicron]
+repo_path = "~/omicron"
+rust_toolchain = "1.91.1"
+
+[omicron.overrides]
+cockroachdb_redundancy = 3
+control_plane_storage_buffer_gib = 5
+vdev_count = 3
+vdev_size_bytes = 42949672960
+"#;
+        let config: BuildToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.omicron.repo_path, "~/omicron");
+        assert!(config.omicron.repo_url.is_none()); // new field absent = None
+        assert!(config.omicron.git_ref.is_none()); // new field absent = None
+        assert!(config.propolis.is_none());
+    }
+
+    #[test]
+    fn test_expanded_build_toml() {
+        let toml_str = r#"
+[omicron]
+repo_path = "~/omicron"
+repo_url = "https://github.com/oxidecomputer/omicron.git"
+git_ref = "release-v12"
+rust_toolchain = "1.91.1"
+
+[omicron.overrides]
+cockroachdb_redundancy = 3
+vdev_count = 3
+
+[propolis]
+repo_path = "~/propolis"
+patched = true
+patch_type = "string-io-emulation"
+source = "github-release"
+repo_url = "https://github.com/swherdman/propolis"
+"#;
+        let config: BuildToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.omicron.repo_url.as_deref(),
+            Some("https://github.com/oxidecomputer/omicron.git")
+        );
+        assert_eq!(config.omicron.git_ref.as_deref(), Some("release-v12"));
+        let p = config.propolis.unwrap();
+        assert_eq!(p.patched, Some(true));
+        assert_eq!(p.patch_type.as_deref(), Some("string-io-emulation"));
+        assert_eq!(p.source, Some(PropolisSource::GithubRelease));
+        assert!(p.local_binary.is_none());
+    }
+
+    #[test]
+    fn test_new_format_deployment_toml() {
+        // The new format uses [hypervisor] ref instead of inline [proxmox]
+        let toml_str = r#"
+[deployment]
+name = "helios01"
+description = "Single-sled Helios on Proxmox"
+
+[hosts.helios01]
+address = "192.168.2.209"
+ssh_user = "swherdman"
+role = "combined"
+host_type = "vm"
+
+[network]
+gateway = "192.168.2.1"
+external_dns_ips = ["192.168.2.40", "192.168.2.41"]
+infra_ip = "192.168.2.50"
+internal_services_range = { first = "192.168.2.40", last = "192.168.2.49" }
+instance_pool_range = { first = "192.168.2.51", last = "192.168.2.60" }
+
+[hypervisor]
+ref = "proxmox-lab"
+
+[hypervisor.vm]
+vmid = 301
+name = "helios01"
+cores = 2
+sockets = 2
+memory_mb = 49152
+disk_gb = 256
+"#;
+        let config: DeploymentToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.deployment.name, "helios01");
+        assert!(config.proxmox.is_none()); // no legacy proxmox
+        let href = config.hypervisor.unwrap();
+        assert_eq!(href.hypervisor_ref, "proxmox-lab");
+        let vm = href.vm.unwrap();
+        assert_eq!(vm.vmid, 301);
+        assert_eq!(vm.name, "helios01");
+        assert_eq!(vm.cores, 2);
+        let host = config.hosts.get("helios01").unwrap();
+        assert_eq!(host.host_type, Some(HostType::Vm));
     }
 }

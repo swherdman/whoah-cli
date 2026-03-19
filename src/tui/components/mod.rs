@@ -1,5 +1,6 @@
 pub mod alert_bar;
 pub mod build_view;
+pub mod config_view;
 pub mod debug_view;
 pub mod disk_panel;
 pub mod log_panel;

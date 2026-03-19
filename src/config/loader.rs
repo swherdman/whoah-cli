@@ -66,6 +66,103 @@ pub fn load_deployment(name: &str) -> Result<DeploymentConfig> {
     })
 }
 
+pub fn shared_dir() -> Result<PathBuf> {
+    Ok(whoah_dir()?.join("shared"))
+}
+
+pub fn hypervisors_dir() -> Result<PathBuf> {
+    Ok(shared_dir()?.join("hypervisors"))
+}
+
+pub fn load_hypervisor(name: &str) -> Result<HypervisorConfig> {
+    let path = hypervisors_dir()?.join(format!("{name}.toml"));
+    let contents = fs::read_to_string(&path)
+        .map_err(|e| eyre!("Hypervisor '{name}' not found at {}: {e}", path.display()))?;
+    let config: HypervisorConfig = toml::from_str(&contents)?;
+    Ok(config)
+}
+
+pub fn list_hypervisors() -> Result<Vec<String>> {
+    let dir = hypervisors_dir()?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().map(|e| e == "toml").unwrap_or(false) {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                names.push(stem.to_string());
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+pub fn load_deployment_state(name: &str) -> Result<DeploymentState> {
+    let path = deployment_dir(name)?.join("state.toml");
+    if !path.exists() {
+        return Ok(DeploymentState::default());
+    }
+    let contents = fs::read_to_string(&path)?;
+    Ok(toml::from_str(&contents)?)
+}
+
+pub fn save_deployment_state(name: &str, state: &DeploymentState) -> Result<()> {
+    let path = deployment_dir(name)?.join("state.toml");
+    let contents = toml::to_string_pretty(state)?;
+    fs::write(&path, contents)?;
+    Ok(())
+}
+
+/// Resolve hypervisor ref into a legacy ProxmoxConfig for backward compat.
+/// If deployment has both `proxmox` and `hypervisor`, `hypervisor` wins.
+pub fn resolve_proxmox_config(deployment: &DeploymentToml) -> Result<Option<ProxmoxConfig>> {
+    if let Some(href) = &deployment.hypervisor {
+        let hyp = load_hypervisor(&href.hypervisor_ref)?;
+        if hyp.hypervisor.hypervisor_type != HypervisorType::Proxmox {
+            return Ok(None);
+        }
+        let px_hyp = hyp.proxmox.ok_or_else(|| {
+            eyre!(
+                "Hypervisor '{}' is type proxmox but has no [proxmox] section",
+                href.hypervisor_ref
+            )
+        })?;
+        let vm = href.vm.as_ref().ok_or_else(|| {
+            eyre!(
+                "Deployment references hypervisor '{}' but has no [hypervisor.vm] section",
+                href.hypervisor_ref
+            )
+        })?;
+        Ok(Some(ProxmoxConfig {
+            host: hyp.credentials.host,
+            ssh_user: hyp.credentials.ssh_user,
+            node: px_hyp.node,
+            iso_storage: px_hyp.iso_storage,
+            disk_storage: px_hyp.disk_storage,
+            iso_file: px_hyp.iso_file,
+            vm: ProxmoxVmConfig {
+                vmid: vm.vmid,
+                name: vm.name.clone(),
+                cores: vm.cores,
+                sockets: vm.sockets,
+                memory_mb: vm.memory_mb,
+                disk_gb: vm.disk_gb,
+                disk_bus: vm.disk_bus.clone(),
+                cpu_type: vm.cpu_type.clone(),
+                os_type: vm.os_type.clone(),
+                net_model: vm.net_model.clone(),
+                net_bridge: vm.net_bridge.clone(),
+            },
+        }))
+    } else {
+        Ok(deployment.proxmox.clone())
+    }
+}
+
 pub fn list_deployments() -> Result<Vec<String>> {
     let dir = deployments_dir()?;
     if !dir.exists() {
@@ -120,10 +217,89 @@ pub fn resolve_deployment(explicit: Option<&str>) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_resolve_explicit_wins() {
         let result = resolve_deployment(Some("my-lab"));
         assert_eq!(result.unwrap(), "my-lab");
+    }
+
+    #[test]
+    fn test_deployment_state_default() {
+        let state = DeploymentState::default();
+        assert!(state.drift.is_none());
+    }
+
+    #[test]
+    fn test_resolve_proxmox_config_legacy() {
+        // When deployment has [proxmox] but no [hypervisor], use legacy
+        let deployment = DeploymentToml {
+            deployment: DeploymentMeta {
+                name: "test".to_string(),
+                description: None,
+            },
+            hosts: BTreeMap::new(),
+            network: NetworkConfig {
+                gateway: "192.168.2.1".to_string(),
+                external_dns_ips: vec![],
+                internal_services_range: IpRange {
+                    first: "192.168.2.40".to_string(),
+                    last: "192.168.2.49".to_string(),
+                },
+                infra_ip: "192.168.2.50".to_string(),
+                instance_pool_range: IpRange {
+                    first: "192.168.2.51".to_string(),
+                    last: "192.168.2.60".to_string(),
+                },
+            },
+            nexus: NexusConfig::default(),
+            proxmox: Some(ProxmoxConfig {
+                host: "192.168.2.5".to_string(),
+                ssh_user: "root".to_string(),
+                node: "PVE".to_string(),
+                iso_storage: "local".to_string(),
+                disk_storage: "local-lvm".to_string(),
+                iso_file: "helios-install-vga.iso".to_string(),
+                vm: ProxmoxVmConfig::default(),
+            }),
+            hypervisor: None,
+        };
+
+        let result = resolve_proxmox_config(&deployment).unwrap();
+        let px = result.unwrap();
+        assert_eq!(px.host, "192.168.2.5");
+        assert_eq!(px.node, "PVE");
+    }
+
+    #[test]
+    fn test_resolve_proxmox_config_none() {
+        // Bare-metal deployment with neither proxmox nor hypervisor
+        let deployment = DeploymentToml {
+            deployment: DeploymentMeta {
+                name: "bare".to_string(),
+                description: None,
+            },
+            hosts: BTreeMap::new(),
+            network: NetworkConfig {
+                gateway: "10.0.0.1".to_string(),
+                external_dns_ips: vec![],
+                internal_services_range: IpRange {
+                    first: "10.0.0.40".to_string(),
+                    last: "10.0.0.49".to_string(),
+                },
+                infra_ip: "10.0.0.50".to_string(),
+                instance_pool_range: IpRange {
+                    first: "10.0.0.51".to_string(),
+                    last: "10.0.0.60".to_string(),
+                },
+            },
+            nexus: NexusConfig::default(),
+            proxmox: None,
+            hypervisor: None,
+        };
+
+        let result = resolve_proxmox_config(&deployment).unwrap();
+        assert!(result.is_none());
     }
 }

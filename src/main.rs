@@ -39,6 +39,9 @@ async fn main() -> Result<()> {
                 cli::config::show(deployment).await?;
             }
         },
+        Some(Command::Migrate(args)) => {
+            cli::migrate::run_migrate(&args.old_name, &args.new_name)?;
+        }
         None => {
             // Launch TUI dashboard
             let deployment_name = config::resolve_deployment(deployment)?;

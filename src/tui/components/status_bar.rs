@@ -30,8 +30,8 @@ impl StatusBarComponent {
         let p = Palette::default();
 
         let tabs = [
-            (Screen::Build, "Build", "1"),
-            (Screen::Config, "Config", "2"),
+            (Screen::Config, "Config", "1"),
+            (Screen::Build, "Build", "2"),
             (Screen::Monitor, "Monitor", "3"),
             (Screen::Debug, "Debug", "d"),
         ];
@@ -97,7 +97,22 @@ impl StatusBarComponent {
         );
     }
 
-    pub fn render_keybindings_for_screen(&self, frame: &mut Frame, area: Rect, screen: Screen) {
+    pub fn render_keybindings_for_screen(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        screen: Screen,
+    ) {
+        self.render_keybindings(frame, area, screen, false);
+    }
+
+    pub fn render_keybindings(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        screen: Screen,
+        config_editing: bool,
+    ) {
         let p = Palette::default();
 
         let mut spans = vec![
@@ -126,7 +141,27 @@ impl StatusBarComponent {
                     Span::styled(":scroll  ", Style::default().fg(p.text_secondary)),
                 ]);
             }
-            Screen::Config => {}
+            Screen::Config => {
+                if config_editing {
+                    spans.extend([
+                        Span::styled("Enter", Style::default().fg(p.green_primary)),
+                        Span::styled(":save ", Style::default().fg(p.text_secondary)),
+                        Span::styled("Esc", Style::default().fg(p.green_primary)),
+                        Span::styled(":cancel  ", Style::default().fg(p.text_secondary)),
+                    ]);
+                } else {
+                    spans.extend([
+                        Span::styled("Tab", Style::default().fg(p.green_primary)),
+                        Span::styled(":panels ", Style::default().fg(p.text_secondary)),
+                        Span::styled("j/k", Style::default().fg(p.green_primary)),
+                        Span::styled(":scroll ", Style::default().fg(p.text_secondary)),
+                        Span::styled("Enter", Style::default().fg(p.green_primary)),
+                        Span::styled(":edit ", Style::default().fg(p.text_secondary)),
+                        Span::styled("Esc", Style::default().fg(p.green_primary)),
+                        Span::styled(":back  ", Style::default().fg(p.text_secondary)),
+                    ]);
+                }
+            }
             Screen::Debug => {
                 spans.extend([
                     Span::styled("[r]", Style::default().fg(p.green_primary)),

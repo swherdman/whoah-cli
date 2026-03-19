@@ -16,6 +16,7 @@ use crate::ssh::session::SshHost;
 use crate::ssh::RemoteHost;
 use crate::tui::components::alert_bar::AlertBar;
 use crate::tui::components::build_view::BuildView;
+use crate::tui::components::config_view::ConfigView;
 use crate::tui::components::debug_view::DebugView;
 use crate::tui::components::disk_panel::DiskPanel;
 use crate::tui::components::log_panel::LogPanel;
@@ -55,6 +56,7 @@ pub struct App {
     status_bar: StatusBarComponent,
     recovery_view: RecoveryView,
     build_view: BuildView,
+    config_view: ConfigView,
     debug_view: DebugView,
     pipeline: Pipeline,
 
@@ -74,7 +76,7 @@ impl App {
             config,
             deployment_name: deployment_name.clone(),
             should_quit: false,
-            screen: Screen::Monitor,
+            screen: Screen::Config,
             monitor_mode: MonitorMode::Dashboard,
             focused: FocusedPanel::Status,
             status_panel: StatusPanel::new(),
@@ -84,6 +86,7 @@ impl App {
             status_bar: StatusBarComponent::new(&deployment_name),
             recovery_view: RecoveryView::new(),
             build_view: BuildView::new(),
+            config_view: ConfigView::new(),
             debug_view: DebugView::new(),
             pipeline: pipeline::build_deploy_pipeline(),
             host: None,
@@ -193,8 +196,8 @@ impl App {
 
         // Global: tab switching via number keys + debug
         match key.code {
-            KeyCode::Char('1') => return Some(Action::SwitchScreen(Screen::Build)),
-            KeyCode::Char('2') => return Some(Action::SwitchScreen(Screen::Config)),
+            KeyCode::Char('1') => return Some(Action::SwitchScreen(Screen::Config)),
+            KeyCode::Char('2') => return Some(Action::SwitchScreen(Screen::Build)),
             KeyCode::Char('3') => return Some(Action::SwitchScreen(Screen::Monitor)),
             KeyCode::Char('d') if self.screen != Screen::Debug => {
                 return Some(Action::SwitchScreen(Screen::Debug));
@@ -236,11 +239,74 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp),
                 _ => None,
             },
-            Screen::Config => match key.code {
-                KeyCode::Char('q') => Some(Action::Quit),
-                KeyCode::Esc => Some(Action::Quit),
-                _ => None,
-            },
+            Screen::Config => {
+                if self.config_view.is_editing() {
+                    // Edit mode: all keys go to the editor
+                    match key.code {
+                        KeyCode::Enter => {
+                            match self.config_view.confirm_edit() {
+                                Ok(()) => self.log("Config field updated"),
+                                Err(msg) => self.log(&format!("ERROR: {msg}")),
+                            }
+                        }
+                        KeyCode::Esc => {
+                            self.config_view.cancel_edit();
+                        }
+                        KeyCode::Backspace => {
+                            self.config_view.edit_backspace();
+                        }
+                        KeyCode::Delete => {
+                            self.config_view.edit_delete();
+                        }
+                        KeyCode::Left => {
+                            self.config_view.edit_move_left();
+                        }
+                        KeyCode::Right => {
+                            self.config_view.edit_move_right();
+                        }
+                        KeyCode::Home => {
+                            self.config_view.edit_home();
+                        }
+                        KeyCode::End => {
+                            self.config_view.edit_end();
+                        }
+                        KeyCode::Char(c) => {
+                            self.config_view.edit_insert_char(c);
+                        }
+                        _ => {}
+                    }
+                    return None;
+                }
+                // Normal mode
+                match key.code {
+                    KeyCode::Char('q') => Some(Action::Quit),
+                    KeyCode::Esc => {
+                        if self.config_view.focus == crate::tui::components::config_view::ConfigFocus::RightPanel {
+                            self.config_view.toggle_focus();
+                            None
+                        } else {
+                            Some(Action::SwitchScreen(Screen::Monitor))
+                        }
+                    }
+                    KeyCode::Tab => {
+                        self.config_view.toggle_focus();
+                        None
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.config_view.navigate_down();
+                        None
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.config_view.navigate_up();
+                        None
+                    }
+                    KeyCode::Enter => {
+                        self.config_view.start_edit();
+                        None
+                    }
+                    _ => None,
+                }
+            }
             Screen::Debug => match key.code {
                 KeyCode::Char('q') => Some(Action::Quit),
                 KeyCode::Esc => Some(Action::SwitchScreen(Screen::Monitor)),
@@ -527,8 +593,10 @@ impl App {
             return;
         };
 
-        if self.config.deployment.proxmox.is_none() {
-            self.log("Cannot build: no [proxmox] section in deployment.toml");
+        let has_proxmox = self.config.deployment.proxmox.is_some()
+            || self.config.deployment.hypervisor.is_some();
+        if !has_proxmox {
+            self.log("Cannot build: no [proxmox] or [hypervisor] section in config");
             return;
         }
 
@@ -591,8 +659,9 @@ impl App {
             .split(frame.area());
 
         self.status_bar.render_tab_bar(frame, chrome[0], self.screen);
+        let config_editing = self.screen == Screen::Config && self.config_view.is_editing();
         self.status_bar
-            .render_keybindings_for_screen(frame, chrome[2], self.screen);
+            .render_keybindings(frame, chrome[2], self.screen, config_editing);
 
         // Dispatch to active screen
         match self.screen {
@@ -613,23 +682,8 @@ impl App {
             .render_pipeline(frame, area, &self.pipeline);
     }
 
-    fn render_config(&self, frame: &mut Frame, area: Rect) {
-        let p = Palette::default();
-        let block = crate::tui::theme::panel_block_accent("Configuration", &p);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let lines = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Overlay browser — coming soon.",
-                Style::default().fg(p.text_tertiary),
-            )),
-        ];
-        frame.render_widget(
-            ratatui::widgets::Paragraph::new(lines).style(Style::default().bg(p.bg_panel)),
-            inner,
-        );
+    fn render_config(&mut self, frame: &mut Frame, area: Rect) {
+        self.config_view.render(frame, area);
     }
 
     fn render_monitor(&mut self, frame: &mut Frame, area: Rect) {
