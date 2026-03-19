@@ -612,13 +612,19 @@ impl ConfigView {
             .iter()
             .map(|name| {
                 let is_activated = self.activated_name.as_deref() == Some(name.as_str());
-                let prefix = if is_activated { "● " } else { "  " };
-                ListItem::new(format!("{prefix}{name}"))
-                    .style(Style::default().fg(p.text_default))
+                if is_activated {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(name.as_str(), Style::default().fg(p.green_primary)),
+                        Span::styled(" ●", Style::default().fg(p.green_primary)),
+                    ]))
+                } else {
+                    ListItem::new(name.as_str())
+                        .style(Style::default().fg(p.text_default))
+                }
             })
             .collect();
         let deploy_list = List::new(items)
-            .highlight_style(Style::default().fg(p.green_primary).add_modifier(Modifier::BOLD))
+            .highlight_style(Style::default().fg(p.text_bright).add_modifier(Modifier::BOLD))
             .highlight_symbol(" > ")
             .highlight_spacing(ratatui::widgets::HighlightSpacing::Always);
         if self.section == ConfigSection::Deployments {
