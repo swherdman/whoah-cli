@@ -62,11 +62,25 @@ impl SshHost {
             .map(|p| p.join("log"))
             .unwrap_or_default();
 
+        // Log the host key fingerprint
+        let hostkey = tokio::process::Command::new("ssh-keygen")
+            .args(["-l", "-F", &config.address])
+            .output()
+            .await
+            .ok()
+            .and_then(|o| {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                stdout.lines()
+                    .find(|l| l.contains("SHA256:"))
+                    .map(|l| l.trim().to_string())
+            });
+        let key_info = hostkey.as_deref().unwrap_or("unknown");
+
         tracing::info!(
             id = %id,
             dest = %destination,
             ctl = %ctl_path.display(),
-            log = %log_path.display(),
+            host_key = %key_info,
             "SSH connected"
         );
 
@@ -162,7 +176,7 @@ impl RemoteHost for SshHost {
         let count = self.command_count.fetch_add(1, Ordering::Relaxed) + 1;
         super::registry::record_command(&self.id, &cmd_short);
 
-        tracing::info!(
+        tracing::debug!(
             id = %self.id,
             host = %self.host,
             cmd_num = count,
@@ -210,7 +224,7 @@ impl RemoteHost for SshHost {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let elapsed = start.elapsed();
 
-        tracing::info!(
+        tracing::debug!(
             id = %self.id,
             host = %self.host,
             cmd_num = count,
@@ -236,7 +250,7 @@ impl RemoteHost for SshHost {
         let count = self.command_count.fetch_add(1, Ordering::Relaxed) + 1;
         super::registry::record_command(&self.id, &cmd_short);
 
-        tracing::info!(
+        tracing::debug!(
             id = %self.id,
             host = %self.host,
             cmd_num = count,

@@ -37,11 +37,16 @@ impl StepStatus {
 
 // ── Step ────────────────────────────────────────────────────────
 
+/// Maximum number of output lines to retain per step for the log panel.
+const STEP_OUTPUT_CAPACITY: usize = 200;
+
 #[derive(Debug, Clone)]
 pub struct Step {
     pub id: &'static str,
     pub name: &'static str,
     pub status: StepStatus,
+    /// Recent output lines for the log panel. Capped at STEP_OUTPUT_CAPACITY.
+    pub output: Vec<String>,
 }
 
 impl Step {
@@ -50,7 +55,16 @@ impl Step {
             id,
             name,
             status: StepStatus::Pending,
+            output: Vec::new(),
         }
+    }
+
+    /// Push a line to the output buffer, trimming if over capacity.
+    pub fn push_output(&mut self, line: String) {
+        if self.output.len() >= STEP_OUTPUT_CAPACITY {
+            self.output.remove(0);
+        }
+        self.output.push(line);
     }
 
     pub fn elapsed(&self) -> Option<Duration> {
@@ -155,9 +169,11 @@ impl Pipeline {
         }
     }
 
-    /// Update the detail text of a running step.
+    /// Update the detail text of a running step and push to the output buffer.
     pub fn update_step_detail(&mut self, id: &str, detail: String) {
         if let Some(step) = self.step_mut(id) {
+            // Push to output buffer (for log panel)
+            step.push_output(detail.clone());
             if let StepStatus::Running { started, .. } = step.status {
                 step.status = StepStatus::Running {
                     started,
@@ -227,43 +243,69 @@ pub fn build_deploy_pipeline() -> Pipeline {
             Phase::new(
                 "Provision VM",
                 vec![
-                    Step::new("prov-create", "Create Proxmox VM"),
-                    Step::new("prov-boot", "Boot Helios ISO"),
-                    Step::new("prov-install", "Install Helios (serial)"),
-                    Step::new("prov-network", "Configure networking"),
-                    Step::new("prov-netcat", "Netcat user setup"),
+                    Step::new("prov-create", "Create VM"),
+                    Step::new("prov-boot", "Boot ISO"),
+                    Step::new("prov-install", "Install Helios"),
+                ],
+            ),
+            Phase::new(
+                "Configure VM",
+                vec![
+                    Step::new("vm-network", "Configure networking"),
+                    Step::new("vm-netcat", "Start netcat listener"),
                 ],
             ),
             Phase::new(
                 "Configure Access",
                 vec![
                     Step::new("access-keys", "Send SSH keys"),
-                    Step::new("access-verify", "Verify SSH connectivity"),
+                    Step::new("access-verify", "Verify SSH"),
                 ],
             ),
             Phase::new(
-                "Build & Deploy",
+                "Cache Setup",
                 vec![
-                    Step::new("build-pkg-cache", "Start package cache"),
-                    Step::new("build-pkg-update", "OS update + reboot"),
-                    Step::new("build-del-be", "Delete old boot environments"),
-                    Step::new("build-packages", "Install packages"),
-                    Step::new("build-rust", "Install Rust toolchain"),
-                    Step::new("build-swap", "Configure swap"),
-                    Step::new("build-clone", "Clone omicron"),
-                    Step::new("build-prereq-builder", "Install builder prerequisites"),
-                    Step::new("build-config-network", "Configure network IPs"),
-                    Step::new("build-config-source", "Apply source overrides"),
-                    Step::new("build-config-vdevs", "Configure vdev count"),
-                    Step::new("build-prereq-runner", "Install runner prerequisites"),
+                    Step::new("cache-start", "Start caching proxies"),
+                ],
+            ),
+            Phase::new(
+                "OS Setup",
+                vec![
+                    Step::new("cache-configure", "Configure caches on Helios"),
+                    Step::new("os-update", "Package update"),
+                    Step::new("os-reboot", "Reboot + reconnect"),
+                    Step::new("os-cleanup", "Delete old boot environments"),
+                    Step::new("os-packages", "Install packages"),
+                    Step::new("os-rust", "Install Rust toolchain"),
+                    Step::new("os-swap", "Configure swap"),
+                ],
+            ),
+            Phase::new(
+                "Build",
+                vec![
+                    Step::new("repo-clone", "Clone omicron"),
+                    Step::new("repo-configure", "Configure build"),
+                    Step::new("build-prereqs-builder", "Builder prerequisites"),
+                    Step::new("build-prereqs-runner", "Runner prerequisites"),
                     Step::new("build-fix-perms", "Fix file ownership"),
-                    Step::new("build-compile", "Build omicron-package"),
-                    Step::new("build-patch-propolis", "Patch propolis binary"),
-                    Step::new("build-vhw", "Create virtual hardware"),
-                    Step::new("build-install", "Install + wait for zones"),
-                    Step::new("build-verify", "Verify DNS + API"),
-                    Step::new("build-quotas", "Set silo quotas"),
-                    Step::new("build-ippool", "Create IP pool"),
+                    Step::new("build-compile", "Compile omicron-package"),
+                    Step::new("build-package", "Package components"),
+                    Step::new("build-patch", "Patch propolis"),
+                ],
+            ),
+            Phase::new(
+                "Deploy",
+                vec![
+                    Step::new("deploy-vhw", "Create virtual hardware"),
+                    Step::new("deploy-install", "Install omicron"),
+                    Step::new("deploy-verify", "Verify deployment"),
+                ],
+            ),
+            Phase::new(
+                "Configure",
+                vec![
+                    Step::new("config-quotas", "Set silo quotas"),
+                    Step::new("config-ippool", "Create IP pool"),
                 ],
             ),
         ],
@@ -277,13 +319,18 @@ mod tests {
     #[test]
     fn test_pipeline_structure() {
         let p = build_deploy_pipeline();
-        assert_eq!(p.phases.len(), 3);
+        assert_eq!(p.phases.len(), 8);
         assert_eq!(p.phases[0].name, "Provision VM");
-        assert_eq!(p.phases[1].name, "Configure Access");
-        assert_eq!(p.phases[2].name, "Build & Deploy");
+        assert_eq!(p.phases[1].name, "Configure VM");
+        assert_eq!(p.phases[2].name, "Configure Access");
+        assert_eq!(p.phases[3].name, "Cache Setup");
+        assert_eq!(p.phases[4].name, "OS Setup");
+        assert_eq!(p.phases[5].name, "Build");
+        assert_eq!(p.phases[6].name, "Deploy");
+        assert_eq!(p.phases[7].name, "Configure");
         let (done, total) = p.progress();
         assert_eq!(done, 0);
-        assert_eq!(total, 27);
+        assert_eq!(total, 28);
     }
 
     #[test]
@@ -323,7 +370,7 @@ mod tests {
         p.fail_step("build-compile", "cargo build failed".to_string());
 
         assert!(p.has_failure());
-        assert!(p.phases[2].has_failure());
+        assert!(p.phases[5].has_failure());
         assert_eq!(
             p.step_mut("build-compile").unwrap().detail(),
             Some("cargo build failed")
@@ -334,15 +381,18 @@ mod tests {
     fn test_find_step() {
         let p = build_deploy_pipeline();
         assert_eq!(p.find_step("prov-create"), Some((0, 0)));
-        assert_eq!(p.find_step("access-verify"), Some((1, 1)));
-        assert_eq!(p.find_step("build-patch-propolis"), Some((2, 14)));
+        assert_eq!(p.find_step("access-verify"), Some((2, 1)));
+        assert_eq!(p.find_step("cache-configure"), Some((4, 0)));
+        assert_eq!(p.find_step("repo-clone"), Some((5, 0)));
+        assert_eq!(p.find_step("build-patch"), Some((5, 7)));
+        assert_eq!(p.find_step("deploy-verify"), Some((6, 2)));
         assert_eq!(p.find_step("nonexistent"), None);
     }
 
     #[test]
     fn test_skip_step() {
         let mut p = build_deploy_pipeline();
-        p.skip_step("build-swap");
+        p.skip_step("os-swap");
 
         let (done, _) = p.progress();
         assert_eq!(done, 1); // skipped counts as terminal

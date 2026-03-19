@@ -1,6 +1,10 @@
+pub mod cargo_progress;
 pub mod dladm;
 pub mod disk;
 pub mod network;
+pub mod omicron_pkg_log;
+pub mod pkg_progress;
 pub mod services;
+pub mod xtask_download;
 pub mod zones;
 pub mod zpool;

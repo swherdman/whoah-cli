@@ -141,6 +141,8 @@ impl StatusBarComponent {
                 spans.extend([
                     Span::styled("[b]", Style::default().fg(p.green_primary)),
                     Span::styled("uild  ", Style::default().fg(p.text_secondary)),
+                    Span::styled("Tab", Style::default().fg(p.green_primary)),
+                    Span::styled(":focus  ", Style::default().fg(p.text_secondary)),
                     Span::styled("j/k", Style::default().fg(p.green_primary)),
                     Span::styled(":scroll  ", Style::default().fg(p.text_secondary)),
                 ]);

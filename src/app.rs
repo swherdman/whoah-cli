@@ -10,6 +10,10 @@ use crate::action::{Action, Screen};
 use crate::config::DeploymentConfig;
 use crate::event::{AppEvent, Event, Severity};
 use crate::ops::pipeline::{self, Pipeline};
+use crate::parse::cargo_progress::{self, CargoTracker};
+use crate::parse::omicron_pkg_log;
+use crate::parse::pkg_progress;
+use crate::parse::xtask_download::{self, XtaskTracker};
 use crate::ops::recover::{run_recovery, RecoveryEvent, RecoveryParams};
 use crate::ops::status::gather_status;
 use crate::ssh::session::SshHost;
@@ -64,9 +68,14 @@ pub struct App {
     host: Option<Arc<SshHost>>,
     last_poll: Option<Instant>,
     needs_reconnect: bool,
+    last_status_log: Option<String>,
 
     // Event channel for async tasks to push events
     app_event_tx: Option<mpsc::UnboundedSender<Event>>,
+
+    // Build step parser state
+    cargo_tracker: CargoTracker,
+    xtask_tracker: XtaskTracker,
 }
 
 impl App {
@@ -93,7 +102,10 @@ impl App {
             host: None,
             last_poll: None,
             needs_reconnect: false,
+            last_status_log: None,
             app_event_tx: None,
+            cargo_tracker: CargoTracker::default(),
+            xtask_tracker: XtaskTracker::default(),
         }
     }
 
@@ -269,8 +281,26 @@ impl App {
                 KeyCode::Char('q') => Some(Action::Quit),
                 KeyCode::Esc => Some(Action::Quit),
                 KeyCode::Char('b') => Some(Action::StartBuild),
-                KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown),
-                KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp),
+                KeyCode::Tab => {
+                    self.build_view.toggle_focus();
+                    None
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.build_view.is_log_focused() {
+                        self.build_view.scroll_log_down();
+                    } else {
+                        self.build_view.select_next_step();
+                    }
+                    None
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if self.build_view.is_log_focused() {
+                        self.build_view.scroll_log_up();
+                    } else {
+                        self.build_view.select_prev_step();
+                    }
+                    None
+                }
                 _ => None,
             },
             Screen::Config => {
@@ -513,11 +543,15 @@ impl App {
                     }
                 }
 
-                tracing::info!(
+                let status_summary = format!(
                     "Status: {} zones, rpool {}%",
                     status.zones.service_counts.values().sum::<u32>(),
                     status.disk.rpool.as_ref().map(|r| r.capacity_pct).unwrap_or(0),
                 );
+                if self.last_status_log.as_deref() != Some(&status_summary) {
+                    tracing::info!("{status_summary}");
+                    self.last_status_log = Some(status_summary);
+                }
             }
             _ => {}
         }
@@ -555,9 +589,82 @@ impl App {
                     .unwrap_or("unknown");
                 self.pipeline.start_step(id);
                 tracing::info!("Build: starting {name}");
+
+                // Reset parser trackers for steps that use them
+                match id.as_str() {
+                    "build-compile" | "build-package" => {
+                        self.cargo_tracker = CargoTracker::default();
+                    }
+                    "build-prereqs-builder" | "build-prereqs-runner" => {
+                        self.xtask_tracker = XtaskTracker::default();
+                    }
+                    _ => {}
+                }
             }
             BuildEvent::StepDetail(id, detail) => {
-                self.pipeline.update_step_detail(id, detail.clone());
+                // Always push raw line to the output buffer
+                if let Some(step) = self.pipeline.step_mut(id) {
+                    step.push_output(detail.clone());
+                }
+
+                // For parser-aware steps, parse the line and show a
+                // structured summary instead of the raw output
+                let summary = match id.as_str() {
+                    "build-compile" => {
+                        if let Some(event) = cargo_progress::parse_cargo_line(detail) {
+                            self.cargo_tracker.update(&event);
+                            Some(self.cargo_tracker.summary())
+                        } else {
+                            None
+                        }
+                    }
+                    "build-package" => {
+                        // build-package gets two streams: cargo Compiling lines
+                        // from the main SSH command, and parsed LOG tail events
+                        // (Verifying/Downloading) from the background task.
+                        // LOG tail events arrive pre-formatted, cargo lines need parsing.
+                        if let Some(event) = cargo_progress::parse_cargo_line(detail) {
+                            self.cargo_tracker.update(&event);
+                            Some(self.cargo_tracker.summary())
+                        } else if detail.starts_with("Verifying:") || detail.starts_with("Downloading:") {
+                            // Pre-formatted from LOG tail — use as-is
+                            Some(detail.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    "os-update" | "os-packages" => {
+                        if let Some(event) = pkg_progress::parse_pkg_line(detail) {
+                            Some(pkg_progress::format_pkg_event(&event))
+                        } else {
+                            None
+                        }
+                    }
+                    "build-prereqs-builder" | "build-prereqs-runner" => {
+                        // Parse both pkg and xtask output
+                        if let Some(event) = xtask_download::parse_xtask_line(detail) {
+                            self.xtask_tracker.update(&event);
+                            Some(self.xtask_tracker.summary())
+                        } else if let Some(event) = pkg_progress::parse_pkg_line(detail) {
+                            Some(pkg_progress::format_pkg_event(&event))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                // Update step detail: use parsed summary if available,
+                // otherwise use the raw detail
+                let display = summary.unwrap_or_else(|| detail.clone());
+                if let Some(step) = self.pipeline.step_mut(id) {
+                    if let crate::ops::pipeline::StepStatus::Running { started, .. } = step.status {
+                        step.status = crate::ops::pipeline::StepStatus::Running {
+                            started,
+                            detail: Some(display),
+                        };
+                    }
+                }
             }
             BuildEvent::StepCompleted(id) => {
                 let name = self.pipeline.find_step(id)
@@ -727,6 +834,7 @@ impl App {
         }
 
         let config = self.config.clone();
+        let deploy_name = self.deployment_name.clone();
 
         // Create an unbounded channel for build events
         let (build_tx, mut build_rx) = mpsc::unbounded_channel::<crate::event::BuildEvent>();
@@ -734,7 +842,7 @@ impl App {
         tokio::spawn(async move {
             // Spawn the deploy task
             let deploy_handle = tokio::spawn(async move {
-                crate::ops::deploy::run_deploy(config, build_tx).await
+                crate::ops::deploy::run_deploy(config, deploy_name, build_tx).await
             });
 
             // Forward build events to the app event loop
@@ -807,7 +915,7 @@ impl App {
         }
     }
 
-    fn render_build(&self, frame: &mut Frame, area: Rect) {
+    fn render_build(&mut self, frame: &mut Frame, area: Rect) {
         self.build_view
             .render_pipeline(frame, area, &self.pipeline);
     }

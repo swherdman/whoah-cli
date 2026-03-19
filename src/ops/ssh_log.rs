@@ -175,9 +175,9 @@ impl<'a> LoggedSsh<'a> {
                     let _ = tokio::io::AsyncWriteExt::write_all(f, entry.as_bytes()).await;
                     let _ = tokio::io::AsyncWriteExt::flush(f).await;
                 }
-                // Send to TUI
+                // Send to TUI (filtered)
                 let trimmed = line.trim();
-                if !trimmed.is_empty() {
+                if !trimmed.is_empty() && !is_noise_line(trimmed) {
                     let _ = tx.send(BuildEvent::StepDetail(
                         step_id.clone(),
                         trimmed.to_string(),
@@ -240,4 +240,21 @@ impl<'a> LoggedSsh<'a> {
         let _ = self.log_file.write_all(entry.as_bytes()).await;
         let _ = self.log_file.flush().await;
     }
+}
+
+/// Returns true if a streaming output line is noise that shouldn't be
+/// sent to the TUI. The line is still logged to the build log file.
+fn is_noise_line(line: &str) -> bool {
+    // SSH warnings
+    if line.starts_with("Warning: Permanently added") { return true; }
+    // Shell env setup noise (from `source env.sh` with xtrace)
+    if line.starts_with("++ export PATH=") { return true; }
+    if line.starts_with("++ PATH=") { return true; }
+    if line.starts_with("++ set +o xtrace") { return true; }
+    if line.starts_with("++ unset ") { return true; }
+    if line.starts_with("++ case ") { return true; }
+    if line.starts_with("++++ dirname ") { return true; }
+    if line.starts_with("+++ readlink ") { return true; }
+    if line.starts_with("++ OMICRON_WS=") { return true; }
+    false
 }

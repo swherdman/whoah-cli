@@ -18,6 +18,16 @@ pub fn deployment_dir(name: &str) -> Result<PathBuf> {
     Ok(deployments_dir()?.join(name))
 }
 
+/// Create a build log path for a specific deployment.
+/// Returns: `~/.whoah/logs/{deployment}/build-{YYYY-MM-DDTHHMM}.log`
+/// Creates the directory if it doesn't exist.
+pub fn build_log_path(deployment: &str) -> Result<PathBuf> {
+    let dir = whoah_dir()?.join("logs").join(deployment);
+    fs::create_dir_all(&dir)?;
+    let timestamp = chrono::Local::now().format("%Y-%m-%dT%H%M");
+    Ok(dir.join(format!("build-{timestamp}.log")))
+}
+
 pub fn load_global_config() -> Result<GlobalConfig> {
     let path = whoah_dir()?.join("config.toml");
     if !path.exists() {

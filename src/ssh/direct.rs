@@ -82,7 +82,23 @@ impl DirectSsh {
             ));
         }
 
-        tracing::info!(id = %id, "DirectSsh: connected");
+        // Log the host key fingerprint
+        let hostkey = tokio::process::Command::new("ssh-keygen")
+            .args(["-l", "-F", &config.address])
+            .output()
+            .await
+            .ok()
+            .and_then(|o| {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                stdout.lines()
+                    .find(|l| l.contains("SHA256:"))
+                    .map(|l| l.trim().to_string())
+            });
+        if let Some(ref key) = hostkey {
+            tracing::info!(id = %id, host = %config.address, "DirectSsh: connected — host key: {key}");
+        } else {
+            tracing::info!(id = %id, host = %config.address, "DirectSsh: connected");
+        }
 
         // Register in the session registry
         super::registry::register(
@@ -160,7 +176,7 @@ impl RemoteHost for DirectSsh {
         let count = self.command_count.fetch_add(1, Ordering::Relaxed) + 1;
         super::registry::record_command(&self.id, &cmd_short);
 
-        tracing::info!(
+        tracing::debug!(
             id = %self.id,
             host = %self.host,
             cmd_num = count,
@@ -184,7 +200,7 @@ impl RemoteHost for DirectSsh {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let elapsed = start.elapsed();
 
-        tracing::info!(
+        tracing::debug!(
             id = %self.id,
             host = %self.host,
             cmd_num = count,
@@ -209,7 +225,7 @@ impl RemoteHost for DirectSsh {
         let count = self.command_count.fetch_add(1, Ordering::Relaxed) + 1;
         super::registry::record_command(&self.id, &cmd_short);
 
-        tracing::info!(
+        tracing::debug!(
             id = %self.id,
             host = %self.host,
             cmd_num = count,

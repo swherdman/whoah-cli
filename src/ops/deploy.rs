@@ -21,8 +21,13 @@ use crate::ssh::RemoteHost;
 /// Run the full deploy pipeline, sending progress events through `tx`.
 pub async fn run_deploy(
     config: DeploymentConfig,
+    deployment_name: String,
     tx: mpsc::UnboundedSender<BuildEvent>,
 ) -> Result<()> {
+    // Create consolidated build log
+    let build_log = crate::config::loader::build_log_path(&deployment_name)?;
+    tracing::info!("Build log: {}", build_log.display());
+
     let resolved_proxmox = resolve_proxmox_config(&config.deployment)?;
     let proxmox_config = resolved_proxmox
         .as_ref()
@@ -37,10 +42,10 @@ pub async fn run_deploy(
     };
     let pve = SshHost::connect(&pve_host_config).await?;
 
-    // Phase 1: Provision VM
-    let helios_ip = run_provision(&pve, proxmox_config, &tx).await?;
+    // Phase 1: Provision VM + Phase 2: Configure VM
+    let helios_ip = run_provision(&pve, proxmox_config, &tx, &build_log).await?;
 
-    // Phase 2: Configure Access
+    // Phase 3: Configure Access
     let ssh_user = run_configure_access(&helios_ip, &tx).await?;
 
     // Notify the App of the discovered IP so it can update config
@@ -52,14 +57,14 @@ pub async fn run_deploy(
         },
     );
 
-    // Phase 3: Build & Deploy
+    // Phase 4: Cache Setup
     run_setup_pkg_cache(&helios_ip, &ssh_user, &tx).await?;
-    run_os_setup(&helios_ip, &ssh_user, &config, &tx).await?;
 
-    // Phase 3 continued: Omicron build & deploy
-    run_omicron_build(&helios_ip, &ssh_user, &config, &tx).await?;
+    // Phase 5: OS Setup
+    run_os_setup(&helios_ip, &ssh_user, &config, &tx, &build_log).await?;
 
-    // Phase 4: future increments (patches)
+    // Phase 6-8: Build, Deploy, Configure
+    run_omicron_build(&helios_ip, &ssh_user, &config, &tx, &build_log).await?;
 
     // Cleanup
     let _ = pve.close().await;
@@ -70,6 +75,7 @@ async fn run_provision(
     pve: &SshHost,
     config: &ProxmoxConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
+    build_log: &PathBuf,
 ) -> Result<String> {
     let vmid = config.vm.vmid;
 
@@ -133,16 +139,11 @@ async fn run_provision(
         BuildEvent::StepDetail("prov-install".into(), "Connecting to serial console...".into()),
     );
 
-    let log_dir = crate::config::loader::whoah_dir()
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("logs");
-    let log_path = log_dir.join("serial-install.log");
-
     let mut console = SerialConsole::connect_with_log(
         &config.host,
         &config.ssh_user,
         vmid,
-        Some(log_path),
+        Some(build_log.clone()),
     )
     .await
     .map_err(|e| {
@@ -293,15 +294,15 @@ async fn run_provision(
     send(tx_ref, BuildEvent::StepCompleted("prov-install".into()));
 
     // Step: Configure networking
-    send(tx_ref, BuildEvent::StepStarted("prov-network".into()));
+    send(tx_ref, BuildEvent::StepStarted("vm-network".into()));
     send(
         tx_ref,
-        BuildEvent::StepDetail("prov-network".into(), "Waiting for VM to reboot...".into()),
+        BuildEvent::StepDetail("vm-network".into(), "Waiting for VM to reboot...".into()),
     );
 
     // Wait for the VM to come back up
     proxmox::wait_for_running(pve, vmid).await.map_err(|e| {
-        send(tx_ref, BuildEvent::StepFailed("prov-network".into(), format!("VM didn't restart: {e}")));
+        send(tx_ref, BuildEvent::StepFailed("vm-network".into(), format!("VM didn't restart: {e}")));
         e
     })?;
 
@@ -311,37 +312,36 @@ async fn run_provision(
     // Open a new serial console connection
     send(
         tx_ref,
-        BuildEvent::StepDetail("prov-network".into(), "Reconnecting to serial console...".into()),
+        BuildEvent::StepDetail("vm-network".into(), "Reconnecting to serial console...".into()),
     );
 
-    let log_path_net = log_dir.join("serial-network.log");
     let mut console = SerialConsole::connect_with_log(
         &config.host,
         &config.ssh_user,
         vmid,
-        Some(log_path_net),
+        Some(build_log.clone()),
     )
     .await
     .map_err(|e| {
-        send(tx_ref, BuildEvent::StepFailed("prov-network".into(), format!("Serial reconnect failed: {e}")));
+        send(tx_ref, BuildEvent::StepFailed("vm-network".into(), format!("Serial reconnect failed: {e}")));
         e
     })?;
 
     // Wait for login prompt or shell prompt (boot from disk takes 30-60s)
     send(
         tx_ref,
-        BuildEvent::StepDetail("prov-network".into(), "Waiting for Helios to boot from disk...".into()),
+        BuildEvent::StepDetail("vm-network".into(), "Waiting for Helios to boot from disk...".into()),
     );
 
     let post_reboot = console
         .wait_for(
             Duration::from_secs(300),
-            |line| { send(tx_ref, BuildEvent::StepDetail("prov-network".into(), line.to_string())); },
+            |line| { send(tx_ref, BuildEvent::StepDetail("vm-network".into(), line.to_string())); },
             |line| line.contains("login:") || line.trim().ends_with('#'),
         )
         .await
         .map_err(|e| {
-            send(tx_ref, BuildEvent::StepFailed("prov-network".into(), format!("Boot timeout: {e}")));
+            send(tx_ref, BuildEvent::StepFailed("vm-network".into(), format!("Boot timeout: {e}")));
             e
         })?;
 
@@ -353,7 +353,7 @@ async fn run_provision(
         let login_response = console
             .wait_for(
                 Duration::from_secs(15),
-                |line| { send(tx_ref, BuildEvent::StepDetail("prov-network".into(), line.to_string())); },
+                |line| { send(tx_ref, BuildEvent::StepDetail("vm-network".into(), line.to_string())); },
                 |line| line.contains("Password:") || line.trim().ends_with('#'),
             )
             .await?;
@@ -364,12 +364,12 @@ async fn run_provision(
             console
                 .wait_for(
                     Duration::from_secs(15),
-                    |line| { send(tx_ref, BuildEvent::StepDetail("prov-network".into(), line.to_string())); },
+                    |line| { send(tx_ref, BuildEvent::StepDetail("vm-network".into(), line.to_string())); },
                     |line| line.trim().ends_with('#'),
                 )
                 .await
                 .map_err(|e| {
-                    send(tx_ref, BuildEvent::StepFailed("prov-network".into(), format!("Login failed: {e}")));
+                    send(tx_ref, BuildEvent::StepFailed("vm-network".into(), format!("Login failed: {e}")));
                     e
                 })?;
         }
@@ -378,7 +378,7 @@ async fn run_provision(
     // Configure network interface
     send(
         tx_ref,
-        BuildEvent::StepDetail("prov-network".into(), "Configuring network interface...".into()),
+        BuildEvent::StepDetail("vm-network".into(), "Configuring network interface...".into()),
     );
 
     // Discover NIC name dynamically via dladm
@@ -398,7 +398,7 @@ async fn run_provision(
     send(
         tx_ref,
         BuildEvent::StepDetail(
-            "prov-network".into(),
+            "vm-network".into(),
             format!("Discovered NIC: {nic_name}"),
         ),
     );
@@ -423,7 +423,7 @@ async fn run_provision(
     // Wait a moment for DHCP, then get the IP
     send(
         tx_ref,
-        BuildEvent::StepDetail("prov-network".into(), "Waiting for DHCP address...".into()),
+        BuildEvent::StepDetail("vm-network".into(), "Waiting for DHCP address...".into()),
     );
 
     // Poll ipadm show-addr until we see an IP on the discovered NIC
@@ -469,25 +469,25 @@ async fn run_provision(
 
     if ip_address.is_empty() {
         let msg = "Could not obtain DHCP address after 45s".to_string();
-        send(tx_ref, BuildEvent::StepFailed("prov-network".into(), msg.clone()));
+        send(tx_ref, BuildEvent::StepFailed("vm-network".into(), msg.clone()));
         return Err(eyre!("{msg}"));
     }
 
     send(
         tx_ref,
         BuildEvent::StepDetail(
-            "prov-network".into(),
+            "vm-network".into(),
             format!("Network configured — IP: {ip_address}"),
         ),
     );
-    send(tx_ref, BuildEvent::StepCompleted("prov-network".into()));
+    send(tx_ref, BuildEvent::StepCompleted("vm-network".into()));
 
     // Step: Netcat user setup
-    send(tx_ref, BuildEvent::StepStarted("prov-netcat".into()));
+    send(tx_ref, BuildEvent::StepStarted("vm-netcat".into()));
     send(
         tx_ref,
         BuildEvent::StepDetail(
-            "prov-netcat".into(),
+            "vm-netcat".into(),
             "Starting netcat listener on port 1701...".into(),
         ),
     );
@@ -503,11 +503,11 @@ async fn run_provision(
     send(
         tx_ref,
         BuildEvent::StepDetail(
-            "prov-netcat".into(),
+            "vm-netcat".into(),
             format!("Netcat listener ready on {ip_address}:1701"),
         ),
     );
-    send(tx_ref, BuildEvent::StepCompleted("prov-netcat".into()));
+    send(tx_ref, BuildEvent::StepCompleted("vm-netcat".into()));
 
     Ok(ip_address)
 }
@@ -713,6 +713,7 @@ async fn run_os_setup(
     ssh_user: &str,
     config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
+    build_log: &PathBuf,
 ) -> Result<()> {
     let helios_config = HostConfig {
         address: helios_ip.to_string(),
@@ -721,20 +722,17 @@ async fn run_os_setup(
         host_type: None,
     };
 
-    let log_dir = crate::config::loader::whoah_dir()
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("logs");
-    let log_path = log_dir.join("os-setup.log");
+    let log_path = build_log.clone();
 
     let helios = DirectSsh::connect(&helios_config).await?;
     helios.set_label("Build/pkg-update");
 
     // --- Step: OS update + reboot ---
-    send(tx, BuildEvent::StepStarted("build-pkg-update".into()));
+    send(tx, BuildEvent::StepStarted("os-update".into()));
 
     {
         let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
-            &helios, log_path.clone(), tx, "build-pkg-update",
+            &helios, log_path.clone(), tx, "os-update",
         ).await?;
 
         ssh.detail("Running pkg update...").await;
@@ -749,34 +747,46 @@ async fn run_os_setup(
         if be_count <= 1 {
             // Only one BE — no update happened
             ssh.detail("Already up to date — skipping reboot").await;
-            send(tx, BuildEvent::StepCompleted("build-pkg-update".into()));
+            send(tx, BuildEvent::StepCompleted("os-update".into()));
+
+            // Skip os-reboot step
+            send(tx, BuildEvent::StepStarted("os-reboot".into()));
+            send(tx, BuildEvent::StepDetail(
+                "os-reboot".into(),
+                "Skipped — no update".into(),
+            ));
+            send(tx, BuildEvent::StepCompleted("os-reboot".into()));
         } else {
-            ssh.detail("Rebooting for OS update...").await;
+            send(tx, BuildEvent::StepCompleted("os-update".into()));
+
+            // --- Step: os-reboot ---
+            send(tx, BuildEvent::StepStarted("os-reboot".into()));
+            send(tx, BuildEvent::StepDetail(
+                "os-reboot".into(),
+                "Rebooting for OS update...".into(),
+            ));
 
             // Fire and forget — reboot kills the connection, don't wait for it.
-            // Use a short timeout so we don't block for 120s.
             let reboot_result = tokio::time::timeout(
                 Duration::from_secs(5),
                 ssh.run("pfexec reboot"),
             ).await;
-            // Expected: timeout or connection error. Both are fine.
             tracing::info!("Reboot command result: {:?}", reboot_result.is_ok());
-
-            send(tx, BuildEvent::StepCompleted("build-pkg-update".into()));
 
             // Drop the SSH connection immediately
             drop(ssh);
             let _ = helios.close().await;
 
-            // Wait for SSH to go down (confirm reboot started)
             send(tx, BuildEvent::StepDetail(
-                "build-del-be".into(),
+                "os-reboot".into(),
                 "Waiting for host to reboot...".into(),
             ));
             tokio::time::sleep(Duration::from_secs(10)).await;
 
             // Wait for SSH to come back
             wait_for_ssh(helios_ip, ssh_user, Duration::from_secs(300)).await?;
+
+            send(tx, BuildEvent::StepCompleted("os-reboot".into()));
 
             return continue_os_setup_after_reboot(
                 helios_ip, ssh_user, config, tx, &log_path,
@@ -812,7 +822,7 @@ async fn continue_os_setup_after_reboot(
     let helios = DirectSsh::connect(&helios_config).await?;
     helios.set_label("Build/OS-setup");
     let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
-        &helios, log_path.clone(), tx, "build-del-be",
+        &helios, log_path.clone(), tx, "os-cleanup",
     ).await?;
 
     // Re-set pkg publisher and HTTPS proxy (new BE has original publisher)
@@ -829,7 +839,7 @@ async fn continue_os_setup_after_reboot(
     ssh.set_proxy(&cache_info.https_proxy_url, &ca_path);
 
     // --- Step: Delete old boot environments ---
-    send(tx, BuildEvent::StepStarted("build-del-be".into()));
+    send(tx, BuildEvent::StepStarted("os-cleanup".into()));
     ssh.detail("Listing boot environments...").await;
     let be_output = ssh.run("beadm list -H").await?;
 
@@ -844,11 +854,11 @@ async fn continue_os_setup_after_reboot(
             }
         }
     }
-    send(tx, BuildEvent::StepCompleted("build-del-be".into()));
+    send(tx, BuildEvent::StepCompleted("os-cleanup".into()));
 
     // --- Step: Install packages ---
-    send(tx, BuildEvent::StepStarted("build-packages".into()));
-    ssh.set_step("build-packages");
+    send(tx, BuildEvent::StepStarted("os-packages".into()));
+    ssh.set_step("os-packages");
     ssh.detail("Installing required packages...").await;
 
     let pkg_result = ssh.run_streaming(
@@ -865,11 +875,11 @@ async fn continue_os_setup_after_reboot(
         ssh.fail(&format!("pkg install failed with exit code {pkg_result}")).await;
         return Err(eyre!("pkg install failed"));
     }
-    send(tx, BuildEvent::StepCompleted("build-packages".into()));
+    send(tx, BuildEvent::StepCompleted("os-packages".into()));
 
     // --- Step: Install Rust ---
-    send(tx, BuildEvent::StepStarted("build-rust".into()));
-    ssh.set_step("build-rust");
+    send(tx, BuildEvent::StepStarted("os-rust".into()));
+    ssh.set_step("os-rust");
 
     let toolchain = "1.91.1";
     ssh.detail(&format!("Installing Rust toolchain {toolchain}...")).await;
@@ -884,18 +894,18 @@ async fn continue_os_setup_after_reboot(
                  bash -s -- -y --default-toolchain {toolchain}' 2>&1"
             )
         ).await.map_err(|e| {
-            let _ = tx.send(BuildEvent::StepFailed("build-rust".into(), e.to_string()));
+            let _ = tx.send(BuildEvent::StepFailed("os-rust".into(), e.to_string()));
             e
         })?;
 
         let verify = ssh.run("bash -c '. ~/.cargo/env && rustc -V'").await?;
         ssh.detail(&format!("Installed: {}", verify.stdout.trim())).await;
     }
-    send(tx, BuildEvent::StepCompleted("build-rust".into()));
+    send(tx, BuildEvent::StepCompleted("os-rust".into()));
 
     // --- Step: Configure swap ---
-    send(tx, BuildEvent::StepStarted("build-swap".into()));
-    ssh.set_step("build-swap");
+    send(tx, BuildEvent::StepStarted("os-swap".into()));
+    ssh.set_step("os-swap");
     ssh.detail("Checking swap...").await;
 
     let swap_check = ssh.run("swap -l").await?;
@@ -916,7 +926,7 @@ async fn continue_os_setup_after_reboot(
         ssh.run_check("pfexec /usr/sbin/swap -a /dev/zvol/dsk/rpool/swap").await?;
         ssh.detail("Swap configured").await;
     }
-    send(tx, BuildEvent::StepCompleted("build-swap".into()));
+    send(tx, BuildEvent::StepCompleted("os-swap".into()));
 
     let _ = helios.close().await;
     Ok(())
@@ -928,6 +938,7 @@ async fn run_omicron_build(
     ssh_user: &str,
     config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
+    build_log: &PathBuf,
 ) -> Result<()> {
     let helios_config = HostConfig {
         address: helios_ip.to_string(),
@@ -936,15 +947,12 @@ async fn run_omicron_build(
         host_type: None,
     };
 
-    let log_dir = crate::config::loader::whoah_dir()
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("logs");
-    let log_path = log_dir.join("omicron-build.log");
+    let log_path = build_log.clone();
 
     let helios = DirectSsh::connect(&helios_config).await?;
     helios.set_label("Build/Omicron");
     let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
-        &helios, log_path.clone(), tx, "build-clone",
+        &helios, log_path.clone(), tx, "repo-clone",
     ).await?;
 
     // Re-set proxy for HTTPS downloads
@@ -958,7 +966,7 @@ async fn run_omicron_build(
     let network = &config.deployment.network;
 
     // --- Step: Clone omicron ---
-    send(tx, BuildEvent::StepStarted("build-clone".into()));
+    send(tx, BuildEvent::StepStarted("repo-clone".into()));
     ssh.detail("Cloning omicron repository...").await;
 
     let omicron_url = config
@@ -985,12 +993,12 @@ async fn run_omicron_build(
         ssh.run_check(&format!("cd {repo_path} && git checkout {git_ref}")).await?;
     }
 
-    send(tx, BuildEvent::StepCompleted("build-clone".into()));
+    send(tx, BuildEvent::StepCompleted("repo-clone".into()));
 
-    // --- Step: Configure network IPs (early — before packaging bakes configs) ---
-    send(tx, BuildEvent::StepStarted("build-config-network".into()));
-    ssh.set_step("build-config-network");
-    ssh.detail("Configuring network IPs in config-rss.toml...").await;
+    // --- Step: Configure build (network IPs, source overrides, vdev count) ---
+    send(tx, BuildEvent::StepStarted("repo-configure".into()));
+    ssh.set_step("repo-configure");
+    ssh.detail("Configuring build parameters...").await;
 
     let gateway = &network.gateway;
     let dns_ip_0 = network.external_dns_ips.first().map(|s| s.as_str()).unwrap_or("192.168.2.40");
@@ -1023,19 +1031,7 @@ async fn run_omicron_build(
         r#"sed -i 's/nexthop = "192\.168\.[0-9]*\.[0-9]*"/nexthop = "{gateway}"/' {rss_path}"#
     )).await?;
 
-    ssh.detail("Verifying network config...").await;
-    let rss_check = ssh.run(&format!(
-        "grep -E 'external_dns_ips|^first|^last|infra_ip|nexthop|address.*192' {rss_path}"
-    )).await?;
-    ssh.detail(&format!("Network config:\n{}", rss_check.stdout.trim())).await;
-
-    send(tx, BuildEvent::StepCompleted("build-config-network".into()));
-
-    // --- Step: Apply source overrides (early — before cargo build compiles them) ---
-    send(tx, BuildEvent::StepStarted("build-config-source".into()));
-    ssh.set_step("build-config-source");
-    ssh.detail("Applying source code overrides...").await;
-
+    // Source overrides
     if let Some(crdb) = overrides.cockroachdb_redundancy {
         ssh.detail(&format!("Setting COCKROACHDB_REDUNDANCY = {crdb}...")).await;
         ssh.run_check(&format!(
@@ -1052,16 +1048,10 @@ async fn run_omicron_build(
         )).await?;
     }
 
-    send(tx, BuildEvent::StepCompleted("build-config-source".into()));
-
-    // --- Step: Configure vdev count (early — before packaging bakes config.toml) ---
-    send(tx, BuildEvent::StepStarted("build-config-vdevs".into()));
-    ssh.set_step("build-config-vdevs");
-
+    // Vdev configuration
     if let Some(vdev_count) = overrides.vdev_count {
         ssh.detail(&format!("Configuring {vdev_count} vdevs...")).await;
 
-        // M.2 boot disks + U.2 data disks
         let mut vdev_entries: Vec<String> = vec![
             r#"    \"m2_0.vdev\","#.to_string(),
             r#"    \"m2_1.vdev\","#.to_string(),
@@ -1087,15 +1077,20 @@ with open('{config_toml_path}', 'w') as f:
 print('Updated vdevs to {vdev_count}')
 ""#
         )).await?;
-    } else {
-        ssh.detail("Using default vdev count").await;
     }
 
-    send(tx, BuildEvent::StepCompleted("build-config-vdevs".into()));
+    // Summary
+    let crdb_val = overrides.cockroachdb_redundancy.map_or("default".into(), |v| v.to_string());
+    let vdev_val = overrides.vdev_count.map_or("default".into(), |v| v.to_string());
+    ssh.detail(&format!(
+        "DNS: [{dns_ip_0}, {dns_ip_1}], Infra: {infra_ip}, CRDB: {crdb_val}, Vdevs: {vdev_val}"
+    )).await;
+
+    send(tx, BuildEvent::StepCompleted("repo-configure".into()));
 
     // --- Step: Install builder prerequisites ---
-    send(tx, BuildEvent::StepStarted("build-prereq-builder".into()));
-    ssh.set_step("build-prereq-builder");
+    send(tx, BuildEvent::StepStarted("build-prereqs-builder".into()));
+    ssh.set_step("build-prereqs-builder");
     ssh.detail("Installing builder prerequisites...").await;
 
     // Use proxy — the script runs cargo xtask download which fetches from buildomat via HTTPS
@@ -1103,15 +1098,15 @@ print('Updated vdevs to {vdev_count}')
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
          pfexec env PATH=$PATH ./tools/install_builder_prerequisites.sh -y' 2>&1"
     )).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-prereq-builder".into(), e.to_string()));
+        send(tx, BuildEvent::StepFailed("build-prereqs-builder".into(), e.to_string()));
         e
     })?;
 
-    send(tx, BuildEvent::StepCompleted("build-prereq-builder".into()));
+    send(tx, BuildEvent::StepCompleted("build-prereqs-builder".into()));
 
     // --- Step: Install runner prerequisites ---
-    send(tx, BuildEvent::StepStarted("build-prereq-runner".into()));
-    ssh.set_step("build-prereq-runner");
+    send(tx, BuildEvent::StepStarted("build-prereqs-runner".into()));
+    ssh.set_step("build-prereqs-runner");
     ssh.detail("Installing runner prerequisites...").await;
 
     // Use proxy — the script may download prebuilt artifacts via HTTPS
@@ -1119,11 +1114,11 @@ print('Updated vdevs to {vdev_count}')
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
          pfexec env PATH=$PATH ./tools/install_runner_prerequisites.sh -y' 2>&1"
     )).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-prereq-runner".into(), e.to_string()));
+        send(tx, BuildEvent::StepFailed("build-prereqs-runner".into(), e.to_string()));
         e
     })?;
 
-    send(tx, BuildEvent::StepCompleted("build-prereq-runner".into()));
+    send(tx, BuildEvent::StepCompleted("build-prereqs-runner".into()));
 
     // --- Step: Fix file ownership ---
     send(tx, BuildEvent::StepStarted("build-fix-perms".into()));
@@ -1136,32 +1131,15 @@ print('Updated vdevs to {vdev_count}')
 
     send(tx, BuildEvent::StepCompleted("build-fix-perms".into()));
 
-    // --- Step: Build omicron-package ---
+    // --- Step: Compile omicron-package binary ---
     send(tx, BuildEvent::StepStarted("build-compile".into()));
     ssh.set_step("build-compile");
-    ssh.detail("Building omicron-package (this takes 45-60 min on first build)...").await;
+    ssh.detail("Compiling omicron-package...").await;
 
     // Use proxy — cargo downloads crates from crates.io/github via HTTPS
     ssh.run_streaming_check_with_proxy(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
-         cargo build --release -v --bin omicron-package' 2>&1"
-    )).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-compile".into(), e.to_string()));
-        e
-    })?;
-
-    ssh.detail("Creating packaging target...").await;
-    ssh.run_check(&format!(
-        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
-         ./target/release/omicron-package -t default target create -p dev' 2>&1"
-    )).await?;
-
-    ssh.detail("Packaging all components...").await;
-    // Use proxy — omicron-package downloads prebuilt binaries from buildomat via HTTPS
-    // reqwest respects https_proxy + SSL_CERT_FILE env vars
-    ssh.run_streaming_check_with_proxy(&format!(
-        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
-         ./target/release/omicron-package package' 2>&1"
+         cargo build --release --bin omicron-package' 2>&1"
     )).await.map_err(|e| {
         send(tx, BuildEvent::StepFailed("build-compile".into(), e.to_string()));
         e
@@ -1169,9 +1147,86 @@ print('Updated vdevs to {vdev_count}')
 
     send(tx, BuildEvent::StepCompleted("build-compile".into()));
 
+    // --- Step: Package components ---
+    send(tx, BuildEvent::StepStarted("build-package".into()));
+    ssh.set_step("build-package");
+    ssh.detail("Creating packaging target...").await;
+
+    ssh.run_check(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         ./target/release/omicron-package -t default target create -p dev' 2>&1"
+    )).await?;
+
+    ssh.detail("Packaging all components...").await;
+
+    // Spawn a background task to tail ~/omicron/out/LOG for per-package
+    // download progress. omicron-package uses indicatif progress bars on
+    // stdout (carriage returns, not newlines) so we get no streaming output
+    // during downloads. The LOG file has structured JSON events per package.
+    let expanded_repo = repo_path.replace("~", &format!("/home/{ssh_user}"));
+    let log_file_path = format!("{expanded_repo}/out/LOG");
+    let log_tail_tx = tx.clone();
+    let log_tail_host = helios_config.clone();
+    let log_tail_path = log_file_path.clone();
+    let log_tail_handle = tokio::spawn(async move {
+        // Connect a separate SSH session for tailing
+        let tail_ssh = match DirectSsh::connect(&log_tail_host).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::debug!("LOG tail SSH failed (non-fatal): {e}");
+                return;
+            }
+        };
+        // Truncate the LOG file first so we only see events from this run
+        let _ = tail_ssh.execute(&format!("> {log_tail_path}")).await;
+
+        // Use tail -f with a timeout — the tail will run until the main
+        // command finishes and we abort this task
+        let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<String>(64);
+        let tail_cmd = format!("tail -f {log_tail_path} 2>/dev/null");
+        let _tail = tokio::spawn(async move {
+            let _ = tail_ssh.execute_streaming(&tail_cmd, line_tx).await;
+        });
+
+        while let Some(line) = line_rx.recv().await {
+            if let Some(event) = crate::parse::omicron_pkg_log::parse_omicron_pkg_line(&line) {
+                let summary = match &event {
+                    crate::parse::omicron_pkg_log::OmicronPkgEvent::Verifying { package } => {
+                        format!("Verifying: {package}")
+                    }
+                    crate::parse::omicron_pkg_log::OmicronPkgEvent::Downloading { package } => {
+                        format!("Downloading: {package}")
+                    }
+                    crate::parse::omicron_pkg_log::OmicronPkgEvent::Other { package, msg } => {
+                        format!("{package}: {msg}")
+                    }
+                };
+                let _ = log_tail_tx.send(BuildEvent::StepDetail(
+                    "build-package".into(),
+                    summary,
+                ));
+            }
+        }
+    });
+
+    // Use proxy — omicron-package downloads prebuilt binaries from buildomat via HTTPS
+    // reqwest respects https_proxy + SSL_CERT_FILE env vars
+    ssh.run_streaming_check_with_proxy(&format!(
+        "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         ./target/release/omicron-package package' 2>&1"
+    )).await.map_err(|e| {
+        send(tx, BuildEvent::StepFailed("build-package".into(), e.to_string()));
+        e
+    })?;
+
+    // Abort the LOG tail task — the packaging command is done
+    log_tail_handle.abort();
+
+    send(tx, BuildEvent::StepCompleted("build-package".into()));
+
     // --- Step: Patch propolis (download pre-built binary from GitHub release) ---
-    send(tx, BuildEvent::StepStarted("build-patch-propolis".into()));
-    ssh.set_step("build-patch-propolis");
+    send(tx, BuildEvent::StepStarted("build-patch".into()));
+    ssh.set_step("build-patch");
     ssh.detail("Checking for patched propolis binary...").await;
 
     // Check if propolis patching is explicitly disabled
@@ -1203,7 +1258,7 @@ print('Updated vdevs to {vdev_count}')
 
     if !propolis_patched {
         ssh.detail("Propolis patching disabled, skipping").await;
-        send(tx, BuildEvent::StepCompleted("build-patch-propolis".into()));
+        send(tx, BuildEvent::StepCompleted("build-patch".into()));
     } else if matches!(propolis_source, Some(crate::config::PropolisSource::LocalBuild)) {
         // Use local binary
         if let Some(local_path) = propolis_local_binary {
@@ -1218,7 +1273,7 @@ print('Updated vdevs to {vdev_count}')
         } else {
             ssh.detail("Warning: local-build source but no local_binary path set").await;
         }
-        send(tx, BuildEvent::StepCompleted("build-patch-propolis".into()));
+        send(tx, BuildEvent::StepCompleted("build-patch".into()));
     } else {
     // GitHub release source (default)
 
@@ -1265,12 +1320,12 @@ print('Updated vdevs to {vdev_count}')
         ssh.detail("Warning: could not determine propolis rev from Cargo.lock").await;
     }
 
-    send(tx, BuildEvent::StepCompleted("build-patch-propolis".into()));
+    send(tx, BuildEvent::StepCompleted("build-patch".into()));
     } // end else (GitHub release path)
 
     // --- Step: Create virtual hardware ---
-    send(tx, BuildEvent::StepStarted("build-vhw".into()));
-    ssh.set_step("build-vhw");
+    send(tx, BuildEvent::StepStarted("deploy-vhw".into()));
+    ssh.set_step("deploy-vhw");
     ssh.detail("Creating virtual hardware...").await;
 
     let vdev_size = overrides.vdev_size_bytes.unwrap_or(42949672960);
@@ -1285,171 +1340,149 @@ print('Updated vdevs to {vdev_count}')
          --pxa-end {pxa_end} \
          --vdev-size {vdev_size}' 2>&1"
     )).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-vhw".into(), e.to_string()));
+        send(tx, BuildEvent::StepFailed("deploy-vhw".into(), e.to_string()));
         e
     })?;
 
-    send(tx, BuildEvent::StepCompleted("build-vhw".into()));
+    send(tx, BuildEvent::StepCompleted("deploy-vhw".into()));
 
-    // --- Step: Install + wait for zones ---
-    send(tx, BuildEvent::StepStarted("build-install".into()));
-    ssh.set_step("build-install");
-    ssh.detail("Installing omicron (this takes 5-8 minutes)...").await;
+    // --- Step: Install omicron ---
+    send(tx, BuildEvent::StepStarted("deploy-install".into()));
+    ssh.set_step("deploy-install");
+    ssh.detail("Installing omicron...").await;
 
     ssh.run_check(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
          pfexec ./target/release/omicron-package install' 2>&1"
     )).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-install".into(), e.to_string()));
+        send(tx, BuildEvent::StepFailed("deploy-install".into(), e.to_string()));
         e
     })?;
 
-    // Wait for zones to come up
+    send(tx, BuildEvent::StepCompleted("deploy-install".into()));
+
+    // --- Step: Verify deployment (integrated zone wait + DNS + API) ---
+    send(tx, BuildEvent::StepStarted("deploy-verify".into()));
+    ssh.set_step("deploy-verify");
+
     let expected_zones = crate::config::derive_expected_zones(overrides);
     let expected_total: u32 = expected_zones.values().sum();
-    // Add 2 for global + sidecar zones that aren't in the service count
-    let expected_running = expected_total + 2;
-
-    ssh.detail(&format!("Waiting for zones ({expected_running} expected)...")).await;
-
-    for attempt in 0..60 {
-        let zone_output = ssh.run("zoneadm list -cnv | grep running | wc -l").await?;
-        let running: u32 = zone_output.stdout.trim().parse().unwrap_or(0);
-
-        send(tx, BuildEvent::StepDetail(
-            "build-install".into(),
-            format!("Zones: {running}/{expected_running} running"),
-        ));
-
-        if running >= expected_running {
-            ssh.detail(&format!("All {running} zones running")).await;
-            break;
-        }
-
-        if attempt == 59 {
-            ssh.detail(&format!("Warning: only {running}/{expected_running} zones after 5 min")).await;
-        }
-
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
-
-    send(tx, BuildEvent::StepCompleted("build-install".into()));
-
-    // --- Step: Verify DNS + API ---
-    send(tx, BuildEvent::StepStarted("build-verify".into()));
-    ssh.set_step("build-verify");
-    ssh.detail("Waiting for external DNS zones...").await;
+    let expected_running = expected_total + 2; // +2 for global + sidecar
 
     let dns_ip = network.external_dns_ips.first()
         .map(|s| s.as_str())
         .unwrap_or("192.168.2.70");
 
-    // Phase 1: Wait for external_dns zones to reach running state
-    let mut dns_zones_up = false;
-    for attempt in 0..60 {
-        let zone_check = ssh.run(
-            "zoneadm list -cv | grep external_dns | grep running | wc -l"
-        ).await?;
-        let running: u32 = zone_check.stdout.trim().parse().unwrap_or(0);
-
-        if running > 0 {
-            ssh.detail(&format!("{running} external_dns zone(s) running")).await;
-            dns_zones_up = true;
-            break;
-        }
-
-        if attempt % 6 == 5 {
-            ssh.detail(&format!(
-                "Waiting for external_dns zones ({running} running, {}s elapsed)...",
-                (attempt + 1) * 5
-            )).await;
-        }
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
-
-    // Phase 2: Once zones are up, verify DNS actually resolves
     let mut dns_ok = false;
-    if dns_zones_up {
-        ssh.detail(&format!("Checking DNS resolution at {dns_ip}...")).await;
-        for _ in 0..12 {
+    let mut api_ok = false;
+    let mut dns_checked = false;
+    let mut api_checked = false;
+
+    // Integrated polling loop: poll zone status and trigger DNS/API checks
+    // as soon as the relevant zones come up
+    for attempt in 0..120 {
+        let zone_output = ssh.run("zoneadm list -cp").await?;
+        let zone_lines: Vec<&str> = zone_output.stdout.lines()
+            .filter(|l| l.contains(":running:"))
+            .collect();
+        let running = zone_lines.len() as u32;
+
+        // Count per-service running zones
+        let dns_running = zone_lines.iter().filter(|l| l.contains("external_dns")).count();
+        let nexus_running = zone_lines.iter().filter(|l| l.contains("oxz_nexus")).count();
+
+        // Build summary
+        let dns_status = if dns_ok { "DNS: OK" }
+            else if dns_checked { "DNS: checking..." }
+            else if dns_running > 0 { "DNS: zones up" }
+            else { "" };
+        let api_status = if api_ok { "API: OK" }
+            else if api_checked { "API: checking..." }
+            else if nexus_running > 0 { "API: zones up" }
+            else { "" };
+
+        let mut parts = vec![format!("Zones: {running}/{expected_running}")];
+        if !dns_status.is_empty() { parts.push(dns_status.to_string()); }
+        if !api_status.is_empty() { parts.push(api_status.to_string()); }
+
+        send(tx, BuildEvent::StepDetail(
+            "deploy-verify".into(),
+            parts.join(" — "),
+        ));
+
+        // Check DNS as soon as at least 1 external_dns zone is running
+        if !dns_ok && dns_running >= 1 {
             let dns_check = ssh.run(&format!(
                 "dig recovery.sys.oxide.test @{dns_ip} +short +time=3 +tries=1 2>/dev/null"
             )).await?;
             if dns_check.exit_code == 0 && !dns_check.stdout.trim().is_empty() {
-                ssh.detail(&format!("DNS resolving: {}", dns_check.stdout.trim())).await;
                 dns_ok = true;
-                break;
             }
-            tokio::time::sleep(Duration::from_secs(5)).await;
         }
-    }
 
-    if !dns_ok {
-        ssh.detail("Warning: DNS not resolving yet").await;
-    }
+        // Check API as soon as at least 1 nexus zone is running AND DNS works
+        // (nexus IP is only discoverable via DNS — never guess from config)
+        if !api_ok && dns_ok && nexus_running >= 1 {
+            let dns_result = ssh.run(&format!(
+                "dig recovery.sys.oxide.test @{dns_ip} +short 2>/dev/null"
+            )).await?;
+            let resolved = dns_result.stdout.trim().to_string();
+            if let Some(nexus_addr) = resolved.lines().next() {
+                let ping = ssh.run(&format!(
+                    "curl -sf --connect-timeout 3 --max-time 5 http://{nexus_addr}/v1/ping 2>/dev/null"
+                )).await?;
+                if ping.exit_code == 0 {
+                    api_ok = true;
+                }
+            }
+        }
 
-    // Phase 3: Wait for nexus zones to reach running state
-    ssh.detail("Waiting for Nexus zones...").await;
-    let mut nexus_zones_up = false;
-    for attempt in 0..60 {
-        let zone_check = ssh.run(
-            "zoneadm list -cv | grep nexus | grep running | wc -l"
-        ).await?;
-        let running: u32 = zone_check.stdout.trim().parse().unwrap_or(0);
-
-        if running > 0 {
-            ssh.detail(&format!("{running} nexus zone(s) running")).await;
-            nexus_zones_up = true;
+        // Done when DNS + API verified (don't require all zones — some may be slow)
+        if dns_ok && api_ok {
+            send(tx, BuildEvent::StepDetail(
+                "deploy-verify".into(),
+                format!("Zones: {running}/{expected_running} — DNS: OK — API: OK"),
+            ));
             break;
         }
 
-        if attempt % 6 == 5 {
-            ssh.detail(&format!(
-                "Waiting for nexus zones ({running} running, {}s elapsed)...",
-                (attempt + 1) * 5
-            )).await;
+        if attempt == 119 {
+            let mut warnings = vec![];
+            if running < expected_running {
+                warnings.push(format!("only {running}/{expected_running} zones"));
+            }
+            if !dns_ok { warnings.push("DNS not resolving".into()); }
+            if !api_ok { warnings.push("API not responding".into()); }
+            ssh.detail(&format!("Warning: {}", warnings.join(", "))).await;
         }
+
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
-    // Phase 4: Once nexus zones are up, verify API responds
+    send(tx, BuildEvent::StepCompleted("deploy-verify".into()));
+
+    // Resolve nexus_ip for config steps — must come from DNS
     let nexus_ip = if dns_ok {
         let dns_result = ssh.run(&format!(
             "dig recovery.sys.oxide.test @{dns_ip} +short 2>/dev/null"
         )).await?;
         let resolved = dns_result.stdout.trim().to_string();
-        // dig may return multiple IPs; take the first
         resolved.lines().next().unwrap_or(&resolved).to_string()
     } else {
-        // Fall back to first IP in services range
-        network.internal_services_range.first.clone()
+        tracing::warn!("DNS never resolved — skipping quota and IP pool configuration");
+        send(tx, BuildEvent::StepStarted("config-quotas".into()));
+        send(tx, BuildEvent::StepDetail("config-quotas".into(), "Skipped — DNS not available".into()));
+        send(tx, BuildEvent::StepCompleted("config-quotas".into()));
+        send(tx, BuildEvent::StepStarted("config-ippool".into()));
+        send(tx, BuildEvent::StepDetail("config-ippool".into(), "Skipped — DNS not available".into()));
+        send(tx, BuildEvent::StepCompleted("config-ippool".into()));
+        let _ = helios.close().await;
+        return Ok(());
     };
 
-    let mut api_ok = false;
-    if nexus_zones_up {
-        ssh.detail(&format!("Checking Nexus API at {nexus_ip}...")).await;
-        for _ in 0..12 {
-            let ping = ssh.run(&format!(
-                "curl -sf --connect-timeout 3 --max-time 5 http://{nexus_ip}/v1/ping 2>/dev/null"
-            )).await?;
-            if ping.exit_code == 0 {
-                ssh.detail(&format!("Nexus API responding at {nexus_ip}")).await;
-                api_ok = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
-    }
-
-    if !api_ok {
-        ssh.detail("Warning: Nexus API not responding yet").await;
-    }
-
-    send(tx, BuildEvent::StepCompleted("build-verify".into()));
-
     // --- Step: Set silo quotas ---
-    send(tx, BuildEvent::StepStarted("build-quotas".into()));
-    ssh.set_step("build-quotas");
+    send(tx, BuildEvent::StepStarted("config-quotas".into()));
+    ssh.set_step("config-quotas");
     ssh.detail("Setting silo quotas...").await;
 
     let nexus = &config.deployment.nexus;
@@ -1478,11 +1511,11 @@ print('Updated vdevs to {vdev_count}')
         ssh.detail("Silo quotas set").await;
     }
 
-    send(tx, BuildEvent::StepCompleted("build-quotas".into()));
+    send(tx, BuildEvent::StepCompleted("config-quotas".into()));
 
     // --- Step: Create IP pool ---
-    send(tx, BuildEvent::StepStarted("build-ippool".into()));
-    ssh.set_step("build-ippool");
+    send(tx, BuildEvent::StepStarted("config-ippool".into()));
+    ssh.set_step("config-ippool");
     ssh.detail("Creating IP pool...").await;
 
     if auth_result.exit_code == 0 {
@@ -1490,9 +1523,9 @@ print('Updated vdevs to {vdev_count}')
         let pool_first = &network.instance_pool_range.first;
         let pool_last = &network.instance_pool_range.last;
 
-        // Create pool
+        // Create pool (system endpoint — /v1/system/ip-pools)
         let _ = ssh.run(&format!(
-            "curl -sf -X POST http://{nexus_ip}/v1/ip-pools \
+            "curl -sf -X POST http://{nexus_ip}/v1/system/ip-pools \
              -H 'Content-Type: application/json' \
              -b /tmp/oxide-cookie \
              -d '{{\"name\":\"{pool_name}\",\"description\":\"Default IP pool\"}}' 2>/dev/null"
@@ -1500,7 +1533,7 @@ print('Updated vdevs to {vdev_count}')
 
         // Link to silo
         let _ = ssh.run(&format!(
-            "curl -sf -X POST http://{nexus_ip}/v1/ip-pools/{pool_name}/silos \
+            "curl -sf -X POST http://{nexus_ip}/v1/system/ip-pools/{pool_name}/silos \
              -H 'Content-Type: application/json' \
              -b /tmp/oxide-cookie \
              -d '{{\"silo\":\"{}\",\"is_default\":true}}' 2>/dev/null",
@@ -1509,7 +1542,7 @@ print('Updated vdevs to {vdev_count}')
 
         // Add IP range
         let _ = ssh.run(&format!(
-            "curl -sf -X POST http://{nexus_ip}/v1/ip-pools/{pool_name}/ranges/add \
+            "curl -sf -X POST http://{nexus_ip}/v1/system/ip-pools/{pool_name}/ranges/add \
              -H 'Content-Type: application/json' \
              -b /tmp/oxide-cookie \
              -d '{{\"first\":\"{pool_first}\",\"last\":\"{pool_last}\"}}' 2>/dev/null"
@@ -1520,7 +1553,7 @@ print('Updated vdevs to {vdev_count}')
         ssh.detail("Skipped — auth failed earlier").await;
     }
 
-    send(tx, BuildEvent::StepCompleted("build-ippool".into()));
+    send(tx, BuildEvent::StepCompleted("config-ippool".into()));
 
     let _ = helios.close().await;
     Ok(())
@@ -1561,15 +1594,15 @@ async fn run_setup_pkg_cache(
     ssh_user: &str,
     tx: &mpsc::UnboundedSender<BuildEvent>,
 ) -> Result<()> {
-    send(tx, BuildEvent::StepStarted("build-pkg-cache".into()));
+    // Step: cache-start — Start Docker caching proxies on workstation
+    send(tx, BuildEvent::StepStarted("cache-start".into()));
     send(
         tx,
-        BuildEvent::StepDetail("build-pkg-cache".into(), "Starting local caching proxies...".into()),
+        BuildEvent::StepDetail("cache-start".into(), "Starting local caching proxies...".into()),
     );
 
-    // Ensure both Docker containers are running
     let cache_info = crate::ops::pkg_cache::ensure_caches().await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-pkg-cache".into(), e.to_string()));
+        send(tx, BuildEvent::StepFailed("cache-start".into(), e.to_string()));
         e
     })?;
 
@@ -1579,12 +1612,15 @@ async fn run_setup_pkg_cache(
     send(
         tx,
         BuildEvent::StepDetail(
-            "build-pkg-cache".into(),
+            "cache-start".into(),
             format!("nginx {nginx_status}, squid {squid_status} on {}", cache_info.lan_ip),
         ),
     );
+    send(tx, BuildEvent::StepCompleted("cache-start".into()));
 
-    // Connect to Helios host
+    // Step: cache-configure — Configure caches on Helios
+    send(tx, BuildEvent::StepStarted("cache-configure".into()));
+
     let helios_config = HostConfig {
         address: helios_ip.to_string(),
         ssh_user: ssh_user.to_string(),
@@ -1592,66 +1628,65 @@ async fn run_setup_pkg_cache(
         host_type: None,
     };
     let helios = DirectSsh::connect(&helios_config).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-pkg-cache".into(), format!("SSH failed: {e}")));
+        send(tx, BuildEvent::StepFailed("cache-configure".into(), format!("SSH failed: {e}")));
         e
     })?;
 
     // Verify pkg cache reachability
     send(
         tx,
-        BuildEvent::StepDetail("build-pkg-cache".into(), "Verifying pkg cache from Helios...".into()),
+        BuildEvent::StepDetail("cache-configure".into(), "Verifying pkg cache from Helios...".into()),
     );
 
     let pkg_ok = crate::ops::pkg_cache::verify_pkg_cache(&helios, &cache_info.publisher_url).await?;
     if !pkg_ok {
         let _ = helios.close().await;
         let msg = format!("Pkg cache not reachable at {}", cache_info.publisher_url);
-        send(tx, BuildEvent::StepFailed("build-pkg-cache".into(), msg.clone()));
+        send(tx, BuildEvent::StepFailed("cache-configure".into(), msg.clone()));
         return Err(eyre!("{msg}"));
     }
 
     // Set pkg publisher
     send(
         tx,
-        BuildEvent::StepDetail("build-pkg-cache".into(), "Setting pkg publisher...".into()),
+        BuildEvent::StepDetail("cache-configure".into(), "Setting pkg publisher...".into()),
     );
     crate::ops::pkg_cache::set_publisher(&helios, &cache_info.publisher_url).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-pkg-cache".into(), e.to_string()));
+        send(tx, BuildEvent::StepFailed("cache-configure".into(), e.to_string()));
         e
     })?;
 
     // Install CA cert for HTTPS proxy
     send(
         tx,
-        BuildEvent::StepDetail("build-pkg-cache".into(), "Installing HTTPS proxy CA cert...".into()),
+        BuildEvent::StepDetail("cache-configure".into(), "Installing HTTPS proxy CA cert...".into()),
     );
     let ca_cert_path = crate::ops::pkg_cache::install_ca_cert(&helios, &cache_info.lan_ip).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-pkg-cache".into(), format!("CA cert install failed: {e}")));
+        send(tx, BuildEvent::StepFailed("cache-configure".into(), format!("CA cert install failed: {e}")));
         e
     })?;
 
     // Configure proxy environment variables
     send(
         tx,
-        BuildEvent::StepDetail("build-pkg-cache".into(), "Configuring HTTPS proxy env...".into()),
+        BuildEvent::StepDetail("cache-configure".into(), "Configuring HTTPS proxy env...".into()),
     );
     crate::ops::pkg_cache::configure_proxy_env(&helios, &cache_info.https_proxy_url, &ca_cert_path).await.map_err(|e| {
-        send(tx, BuildEvent::StepFailed("build-pkg-cache".into(), format!("Proxy env config failed: {e}")));
+        send(tx, BuildEvent::StepFailed("cache-configure".into(), format!("Proxy env config failed: {e}")));
         e
     })?;
 
     // Verify HTTPS proxy works
     send(
         tx,
-        BuildEvent::StepDetail("build-pkg-cache".into(), "Verifying HTTPS proxy from Helios...".into()),
+        BuildEvent::StepDetail("cache-configure".into(), "Verifying HTTPS proxy from Helios...".into()),
     );
     let proxy_ok = crate::ops::pkg_cache::verify_https_proxy(&helios, &cache_info.https_proxy_url).await?;
     if !proxy_ok {
-        // Non-fatal — HTTPS proxy is a nice-to-have, pkg cache is the critical one
         send(
             tx,
             BuildEvent::StepDetail(
-                "build-pkg-cache".into(),
+                "cache-configure".into(),
                 "Warning: HTTPS proxy not reachable — downloads will go direct".into(),
             ),
         );
@@ -1662,14 +1697,14 @@ async fn run_setup_pkg_cache(
     send(
         tx,
         BuildEvent::StepDetail(
-            "build-pkg-cache".into(),
+            "cache-configure".into(),
             format!(
-                "Caches configured: pkg={} https_proxy={}",
+                "Publisher: {} — Proxy: {}",
                 cache_info.publisher_url, cache_info.https_proxy_url
             ),
         ),
     );
-    send(tx, BuildEvent::StepCompleted("build-pkg-cache".into()));
+    send(tx, BuildEvent::StepCompleted("cache-configure".into()));
 
     Ok(())
 }

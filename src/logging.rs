@@ -10,6 +10,7 @@ fn log_dir() -> PathBuf {
     PathBuf::from(home).join(".whoah").join("logs")
 }
 
+
 pub fn init(verbose: u8) -> Result<()> {
     let log_path = log_dir();
     fs::create_dir_all(&log_path)?;
