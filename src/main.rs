@@ -6,6 +6,7 @@ mod app;
 mod cli;
 mod config;
 mod event;
+mod git;
 mod logging;
 mod ops;
 mod parse;

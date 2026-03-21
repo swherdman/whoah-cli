@@ -161,6 +161,8 @@ impl StatusBarComponent {
                         Span::styled(":activate ", Style::default().fg(p.text_secondary)),
                         Span::styled("e", Style::default().fg(p.green_primary)),
                         Span::styled(":edit ", Style::default().fg(p.text_secondary)),
+                        Span::styled("h/l", Style::default().fg(p.green_primary)),
+                        Span::styled(":sections ", Style::default().fg(p.text_secondary)),
                         Span::styled("Tab", Style::default().fg(p.green_primary)),
                         Span::styled(":panels ", Style::default().fg(p.text_secondary)),
                         Span::styled("j/k", Style::default().fg(p.green_primary)),

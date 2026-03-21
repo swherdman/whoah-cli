@@ -220,9 +220,15 @@ async fn run_wizard() -> Result<()> {
                     first: pool_first,
                     last: pool_last,
                 },
+                ntp_servers: None,
+                dns_servers: None,
+                external_dns_zone_name: None,
+                rack_subnet: None,
+                uplink_port_speed: None,
+                allowed_source_ips: None,
             },
             nexus: NexusConfig::default(),
-            proxmox: None,
+
             hypervisor: None,
         },
         build: BuildToml {
@@ -239,6 +245,7 @@ async fn run_wizard() -> Result<()> {
                 },
             },
             propolis: None,
+            tuning: Default::default(),
         },
         monitoring: MonitoringToml::default(),
     };
@@ -281,7 +288,7 @@ fn build_config_from_discovered(
             },
             network: discovered.network.clone(),
             nexus: NexusConfig::default(),
-            proxmox: None,
+
             hypervisor: None,
         },
         build: BuildToml {
@@ -298,6 +305,7 @@ fn build_config_from_discovered(
                 },
             },
             propolis: None,
+            tuning: Default::default(),
         },
         monitoring: MonitoringToml::default(),
     }

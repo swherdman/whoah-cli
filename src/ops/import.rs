@@ -154,6 +154,12 @@ fn parse_network_from_rss(contents: &str) -> Result<NetworkConfig> {
             first: instance_first,
             last: instance_last,
         },
+        ntp_servers: None,
+        dns_servers: None,
+        external_dns_zone_name: None,
+        rack_subnet: None,
+        uplink_port_speed: None,
+        allowed_source_ips: None,
     })
 }
 

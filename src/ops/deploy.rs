@@ -804,7 +804,7 @@ async fn run_os_setup(
 async fn continue_os_setup_after_reboot(
     helios_ip: &str,
     ssh_user: &str,
-    _config: &DeploymentConfig,
+    config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
     log_path: &PathBuf,
 ) -> Result<()> {
@@ -881,7 +881,7 @@ async fn continue_os_setup_after_reboot(
     send(tx, BuildEvent::StepStarted("os-rust".into()));
     ssh.set_step("os-rust");
 
-    let toolchain = "1.91.1";
+    let toolchain = config.build.omicron.rust_toolchain.as_deref().unwrap_or("1.91.1");
     ssh.detail(&format!("Installing Rust toolchain {toolchain}...")).await;
 
     let rust_check = ssh.run("bash -c '. ~/.cargo/env 2>/dev/null; rustc -V 2>/dev/null'").await?;
@@ -912,10 +912,11 @@ async fn continue_os_setup_after_reboot(
     if swap_check.stdout.contains("swapfile") && swap_check.stdout.lines().count() > 1 {
         ssh.detail("Swap already configured").await;
     } else {
-        ssh.detail("Creating 8GB swap...").await;
+        let swap_gb = config.build.tuning.swap_size_gb.unwrap_or(8);
+        ssh.detail(&format!("Creating {swap_gb}GB swap...")).await;
         let zfs_check = ssh.run("zfs list rpool/swap 2>/dev/null").await?;
         if zfs_check.exit_code != 0 {
-            ssh.run_check("pfexec zfs create -V 8G rpool/swap").await?;
+            ssh.run_check(&format!("pfexec zfs create -V {swap_gb}G rpool/swap")).await?;
         }
         let vfstab = ssh.run("grep rpool/swap /etc/vfstab").await?;
         if vfstab.exit_code != 0 {
@@ -1031,6 +1032,41 @@ async fn run_omicron_build(
         r#"sed -i 's/nexthop = "192\.168\.[0-9]*\.[0-9]*"/nexthop = "{gateway}"/' {rss_path}"#
     )).await?;
 
+    // NTP, DNS resolvers, zone name, rack subnet, uplink speed, allowed source IPs
+    let ntp = network.ntp_servers.as_ref()
+        .map(|v| v.iter().map(|s| format!(r#""{s}""#)).collect::<Vec<_>>().join(", "))
+        .unwrap_or_else(|| r#""0.pool.ntp.org""#.to_string());
+    ssh.run_check(&format!(
+        r#"sed -i 's/^ntp_servers = .*/ntp_servers = [ {ntp} ]/' {rss_path}"#
+    )).await?;
+
+    let resolvers = network.dns_servers.as_ref()
+        .map(|v| v.iter().map(|s| format!(r#""{s}""#)).collect::<Vec<_>>().join(", "))
+        .unwrap_or_else(|| r#""1.1.1.1", "9.9.9.9""#.to_string());
+    ssh.run_check(&format!(
+        r#"sed -i 's/^dns_servers = .*/dns_servers = [ {resolvers} ]/' {rss_path}"#
+    )).await?;
+
+    let zone_name = network.external_dns_zone_name.as_deref().unwrap_or("oxide.test");
+    ssh.run_check(&format!(
+        r#"sed -i 's/^external_dns_zone_name = .*/external_dns_zone_name = "{zone_name}"/' {rss_path}"#
+    )).await?;
+
+    let rack_subnet = network.rack_subnet.as_deref().unwrap_or("fd00:1122:3344:0100::/56");
+    ssh.run_check(&format!(
+        r#"sed -i 's|^rack_subnet = .*|rack_subnet = "{rack_subnet}"|' {rss_path}"#
+    )).await?;
+
+    let uplink_speed = network.uplink_port_speed.as_deref().unwrap_or("40G");
+    ssh.run_check(&format!(
+        r#"sed -i 's/^uplink_port_speed = .*/uplink_port_speed = "{uplink_speed}"/' {rss_path}"#
+    )).await?;
+
+    let allowed_ips = network.allowed_source_ips.as_deref().unwrap_or("any");
+    ssh.run_check(&format!(
+        r#"sed -i 's/^allow = .*/allow = "{allowed_ips}"/' {rss_path}"#
+    )).await?;
+
     // Source overrides
     if let Some(crdb) = overrides.cockroachdb_redundancy {
         ssh.detail(&format!("Setting COCKROACHDB_REDUNDANCY = {crdb}...")).await;
@@ -1076,6 +1112,36 @@ with open('{config_toml_path}', 'w') as f:
     f.write(content)
 print('Updated vdevs to {vdev_count}')
 ""#
+        )).await?;
+    }
+
+    // Sled-agent config.toml tuning (memory_earmark, vmm_reservoir, swap_device)
+    let tuning = &config.build.tuning;
+    let expanded_repo = repo_path.replace("~", &format!("/home/{ssh_user}"));
+    let sled_config_path = format!("{expanded_repo}/smf/sled-agent/non-gimlet/config.toml");
+
+    if let Some(earmark) = tuning.memory_earmark_mb {
+        ssh.run_check(&format!(
+            r#"sed -i 's/^control_plane_memory_earmark_mb = .*/control_plane_memory_earmark_mb = {earmark}/' {sled_config_path}"#
+        )).await?;
+    }
+    if let Some(reservoir) = tuning.vmm_reservoir_percentage {
+        ssh.run_check(&format!(
+            r#"sed -i 's/^vmm_reservoir_percentage = .*/vmm_reservoir_percentage = {reservoir}/' {sled_config_path}"#
+        )).await?;
+    }
+    if let Some(swap_dev) = tuning.swap_device_size_gb {
+        ssh.run_check(&format!(
+            r#"sed -i 's/^swap_device_size_gb = .*/swap_device_size_gb = {swap_dev}/' {sled_config_path}"#
+        )).await?;
+    }
+
+    // svcadm_autoclear: add --cfg to .cargo/config.toml rustflags
+    if tuning.svcadm_autoclear.unwrap_or(false) {
+        ssh.detail("Enabling svcadm_autoclear compile flag...").await;
+        let cargo_config = format!("{expanded_repo}/.cargo/config.toml");
+        ssh.run_check(&format!(
+            r#"sed -i '/^\[target\.x86_64-unknown-illumos\]/,/^\[/ s/^rustflags = \[/rustflags = [\n    "--cfg", "svcadm_autoclear",/' {cargo_config}"#
         )).await?;
     }
 
@@ -1331,6 +1397,9 @@ print('Updated vdevs to {vdev_count}')
     let vdev_size = overrides.vdev_size_bytes.unwrap_or(42949672960);
     let pxa_start = &network.internal_services_range.first;
     let pxa_end = &network.instance_pool_range.last;
+    let vdev_dir_flag = config.build.tuning.vdev_dir.as_ref()
+        .map(|d| format!(" --vdev-dir {d}"))
+        .unwrap_or_default();
 
     ssh.run_check(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
@@ -1338,7 +1407,7 @@ print('Updated vdevs to {vdev_count}')
          --gateway-ip {gateway} \
          --pxa-start {pxa_start} \
          --pxa-end {pxa_end} \
-         --vdev-size {vdev_size}' 2>&1"
+         --vdev-size {vdev_size}{vdev_dir_flag}' 2>&1"
     )).await.map_err(|e| {
         send(tx, BuildEvent::StepFailed("deploy-vhw".into(), e.to_string()));
         e
@@ -1372,6 +1441,10 @@ print('Updated vdevs to {vdev_count}')
     let dns_ip = network.external_dns_ips.first()
         .map(|s| s.as_str())
         .unwrap_or("192.168.2.70");
+
+    let silo_name = &config.deployment.nexus.silo_name;
+    let zone_name = network.external_dns_zone_name.as_deref().unwrap_or("oxide.test");
+    let dns_hostname = format!("{silo_name}.sys.{zone_name}");
 
     let mut dns_ok = false;
     let mut api_ok = false;
@@ -1413,7 +1486,7 @@ print('Updated vdevs to {vdev_count}')
         // Check DNS as soon as at least 1 external_dns zone is running
         if !dns_ok && dns_running >= 1 {
             let dns_check = ssh.run(&format!(
-                "dig recovery.sys.oxide.test @{dns_ip} +short +time=3 +tries=1 2>/dev/null"
+                "dig {dns_hostname} @{dns_ip} +short +time=3 +tries=1 2>/dev/null"
             )).await?;
             if dns_check.exit_code == 0 && !dns_check.stdout.trim().is_empty() {
                 dns_ok = true;
@@ -1424,7 +1497,7 @@ print('Updated vdevs to {vdev_count}')
         // (nexus IP is only discoverable via DNS — never guess from config)
         if !api_ok && dns_ok && nexus_running >= 1 {
             let dns_result = ssh.run(&format!(
-                "dig recovery.sys.oxide.test @{dns_ip} +short 2>/dev/null"
+                "dig {dns_hostname} @{dns_ip} +short 2>/dev/null"
             )).await?;
             let resolved = dns_result.stdout.trim().to_string();
             if let Some(nexus_addr) = resolved.lines().next() {
@@ -1464,7 +1537,7 @@ print('Updated vdevs to {vdev_count}')
     // Resolve nexus_ip for config steps — must come from DNS
     let nexus_ip = if dns_ok {
         let dns_result = ssh.run(&format!(
-            "dig recovery.sys.oxide.test @{dns_ip} +short 2>/dev/null"
+            "dig {dns_hostname} @{dns_ip} +short 2>/dev/null"
         )).await?;
         let resolved = dns_result.stdout.trim().to_string();
         resolved.lines().next().unwrap_or(&resolved).to_string()

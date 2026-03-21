@@ -2,6 +2,7 @@ pub mod alert_bar;
 pub mod build_view;
 pub mod config_view;
 pub mod debug_view;
+pub mod git_ref_selector;
 pub mod disk_panel;
 pub mod log_panel;
 pub mod recovery_view;
@@ -11,17 +12,11 @@ pub mod status_panel;
 use ratatui::prelude::*;
 
 use crate::action::Action;
-use crate::event::Event;
 
 pub trait Component {
-    /// Handle an event, optionally return an action.
-    fn handle_event(&mut self, _event: &Event) -> Option<Action> {
-        None
-    }
-
-    /// Update state based on an action.
+    /// Update state based on an action dispatched by the app.
     fn update(&mut self, _action: &Action) {}
 
-    /// Render into the given area.
+    /// Render into the given area. Must be pure (no state mutation).
     fn render(&self, frame: &mut Frame, area: Rect);
 }

@@ -29,8 +29,6 @@ pub struct DeploymentToml {
     #[serde(default)]
     pub nexus: NexusConfig,
     #[serde(default)]
-    pub proxmox: Option<ProxmoxConfig>,
-    #[serde(default)]
     pub hypervisor: Option<HypervisorRef>,
 }
 
@@ -77,6 +75,18 @@ pub struct NetworkConfig {
     pub internal_services_range: IpRange,
     pub infra_ip: String,
     pub instance_pool_range: IpRange,
+    #[serde(default)]
+    pub ntp_servers: Option<Vec<String>>,
+    #[serde(default)]
+    pub dns_servers: Option<Vec<String>>,
+    #[serde(default)]
+    pub external_dns_zone_name: Option<String>,
+    #[serde(default)]
+    pub rack_subnet: Option<String>,
+    #[serde(default)]
+    pub uplink_port_speed: Option<String>,
+    #[serde(default)]
+    pub allowed_source_ips: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,6 +361,8 @@ pub struct BuildToml {
     pub omicron: OmicronBuildConfig,
     #[serde(default)]
     pub propolis: Option<PropolisBuildConfig>,
+    #[serde(default)]
+    pub tuning: TuningConfig,
 }
 
 impl Default for BuildToml {
@@ -358,6 +370,7 @@ impl Default for BuildToml {
         Self {
             omicron: OmicronBuildConfig::default(),
             propolis: None,
+            tuning: TuningConfig::default(),
         }
     }
 }
@@ -435,6 +448,8 @@ pub struct PropolisBuildConfig {
     #[serde(default)]
     pub repo_url: Option<String>,
     #[serde(default)]
+    pub git_ref: Option<String>,
+    #[serde(default)]
     pub local_binary: Option<String>,
 }
 
@@ -447,6 +462,31 @@ fn default_propolis_repo_path() -> String {
 pub enum PropolisSource {
     GithubRelease,
     LocalBuild,
+}
+
+// --- Tuning config (in build.toml) ---
+
+/// Advanced tuning options for sled-agent, compile-time flags, and system config.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TuningConfig {
+    /// Enable svcadm_autoclear compile-time flag (auto-clear maintenance services)
+    #[serde(default)]
+    pub svcadm_autoclear: Option<bool>,
+    /// Swap zvol size in GB created during OS setup (default: 4)
+    #[serde(default)]
+    pub swap_size_gb: Option<u32>,
+    /// Custom vdev directory (default: /var/tmp via xtask)
+    #[serde(default)]
+    pub vdev_dir: Option<String>,
+    /// Control plane memory earmark in MB (sled-agent config, default: 6144)
+    #[serde(default)]
+    pub memory_earmark_mb: Option<u32>,
+    /// VMM reservoir percentage of unbudgeted DRAM (sled-agent config, default: 60)
+    #[serde(default)]
+    pub vmm_reservoir_percentage: Option<u32>,
+    /// Swap device size in GB for sled-agent config (default: 64)
+    #[serde(default)]
+    pub swap_device_size_gb: Option<u32>,
 }
 
 // --- state.toml (per-deployment runtime state) ---
@@ -719,55 +759,6 @@ disk_gb = 256
     }
 
     #[test]
-    fn test_backward_compat_deployment_toml() {
-        // Existing helios-lab deployment.toml must still parse without new fields
-        let toml_str = r#"
-[deployment]
-name = "helios-lab"
-description = "Single-sled Helios on Proxmox"
-
-[hosts.helios01]
-address = "192.168.2.209"
-ssh_user = "swherdman"
-role = "combined"
-
-[network]
-gateway = "192.168.2.1"
-external_dns_ips = ["192.168.2.40", "192.168.2.41"]
-infra_ip = "192.168.2.50"
-internal_services_range = { first = "192.168.2.40", last = "192.168.2.49" }
-instance_pool_range = { first = "192.168.2.51", last = "192.168.2.60" }
-
-[proxmox]
-host = "192.168.2.5"
-ssh_user = "root"
-node = "PVE"
-iso_storage = "local"
-disk_storage = "local-lvm"
-iso_file = "helios-install-vga.iso"
-
-[proxmox.vm]
-vmid = 302
-name = "helios02"
-cores = 2
-sockets = 2
-memory_mb = 49152
-disk_gb = 256
-disk_bus = "sata"
-cpu_type = "host"
-os_type = "solaris"
-net_model = "e1000e"
-net_bridge = "vmbr0"
-"#;
-        let config: DeploymentToml = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.deployment.name, "helios-lab");
-        assert!(config.hypervisor.is_none()); // new field absent = None
-        let host = config.hosts.get("helios01").unwrap();
-        assert!(host.host_type.is_none()); // new field absent = None
-        assert!(config.proxmox.is_some()); // legacy field still works
-    }
-
-    #[test]
     fn test_backward_compat_build_toml() {
         let toml_str = r#"
 [omicron]
@@ -854,7 +845,6 @@ disk_gb = 256
 "#;
         let config: DeploymentToml = toml::from_str(toml_str).unwrap();
         assert_eq!(config.deployment.name, "helios01");
-        assert!(config.proxmox.is_none()); // no legacy proxmox
         let href = config.hypervisor.unwrap();
         assert_eq!(href.hypervisor_ref, "proxmox-lab");
         let vm = href.vm.unwrap();

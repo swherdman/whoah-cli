@@ -638,9 +638,15 @@ mod tests {
                         first: "192.168.2.81".to_string(),
                         last: "192.168.2.90".to_string(),
                     },
+                    ntp_servers: None,
+                    dns_servers: None,
+                    external_dns_zone_name: None,
+                    rack_subnet: None,
+                    uplink_port_speed: None,
+                    allowed_source_ips: None,
                 },
                 nexus: NexusConfig::default(),
-                proxmox: None,
+
                 hypervisor: None,
             },
             build: BuildToml {

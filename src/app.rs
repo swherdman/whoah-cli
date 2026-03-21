@@ -6,9 +6,10 @@ use ratatui::crossterm::event::{Event as CtEvent, KeyCode, KeyEvent, KeyEventKin
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
 
-use crate::action::{Action, Screen};
+use crate::action::{Action, EventResult, Screen};
 use crate::config::DeploymentConfig;
 use crate::event::{AppEvent, Event, Severity};
+use crate::git::RefCache;
 use crate::ops::pipeline::{self, Pipeline};
 use crate::parse::cargo_progress::{self, CargoTracker};
 use crate::parse::omicron_pkg_log;
@@ -76,6 +77,9 @@ pub struct App {
     // Build step parser state
     cargo_tracker: CargoTracker,
     xtask_tracker: XtaskTracker,
+
+    // Git ref cache for ref selectors (session-scoped, keyed by repo URL)
+    git_ref_cache: RefCache,
 }
 
 impl App {
@@ -106,6 +110,7 @@ impl App {
             app_event_tx: None,
             cargo_tracker: CargoTracker::default(),
             xtask_tracker: XtaskTracker::default(),
+            git_ref_cache: RefCache::new(),
         }
     }
 
@@ -221,7 +226,6 @@ impl App {
     fn handle_event(&mut self, event: &Event) -> Option<Action> {
         match event {
             Event::Terminal(CtEvent::Key(key)) => self.handle_key(*key),
-            Event::Terminal(CtEvent::Resize(w, h)) => Some(Action::Resize(*w, *h)),
             Event::App(app_event) => {
                 self.handle_app_event(app_event);
                 None
@@ -235,187 +239,227 @@ impl App {
             return None;
         }
 
-        // Ctrl+C quits from anywhere
+        // 1. Hard overrides — always fire regardless of input capture
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Some(Action::Quit);
         }
 
-        // Global: tab switching via number keys + debug
-        match key.code {
-            KeyCode::Char('1') => return Some(Action::SwitchScreen(Screen::Config)),
-            KeyCode::Char('2') => return Some(Action::SwitchScreen(Screen::Build)),
-            KeyCode::Char('3') => return Some(Action::SwitchScreen(Screen::Monitor)),
-            KeyCode::Char('d') if self.screen != Screen::Debug => {
-                return Some(Action::SwitchScreen(Screen::Debug));
-            }
-            _ => {}
+        // 2. Screen-specific handler gets first shot (Helix compositor pattern).
+        //    Components that capture input (editors, pickers, modals) return
+        //    Consumed here, preventing globals from firing.
+        match self.handle_screen_key(key) {
+            EventResult::Consumed(action) => return action,
+            EventResult::Ignored => {}
         }
 
-        // Screen-specific keys
-        match self.screen {
-            Screen::Monitor => match self.monitor_mode {
-                MonitorMode::Dashboard => match key.code {
-                    KeyCode::Char('q') => Some(Action::Quit),
-                    KeyCode::Esc => Some(Action::Quit),
-                    KeyCode::Tab => Some(Action::FocusNext),
-                    KeyCode::BackTab => Some(Action::FocusPrev),
-                    KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown),
-                    KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp),
-                    KeyCode::Char('s') => Some(Action::RefreshStatus),
-                    KeyCode::Char('r') => Some(Action::StartRecovery),
-                    _ => None,
-                },
-                MonitorMode::Recovery => match key.code {
-                    KeyCode::Esc => {
-                        self.monitor_mode = MonitorMode::Dashboard;
-                        self.recovery_view.deactivate();
-                        None
-                    }
-                    KeyCode::Char('q') => Some(Action::Quit),
-                    KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown),
-                    KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp),
-                    _ => None,
-                },
-            },
-            Screen::Build => match key.code {
-                KeyCode::Char('q') => Some(Action::Quit),
-                KeyCode::Esc => Some(Action::Quit),
-                KeyCode::Char('b') => Some(Action::StartBuild),
-                KeyCode::Tab => {
-                    self.build_view.toggle_focus();
-                    None
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if self.build_view.is_log_focused() {
-                        self.build_view.scroll_log_down();
-                    } else {
-                        self.build_view.select_next_step();
-                    }
-                    None
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if self.build_view.is_log_focused() {
-                        self.build_view.scroll_log_up();
-                    } else {
-                        self.build_view.select_prev_step();
-                    }
-                    None
-                }
-                _ => None,
-            },
-            Screen::Config => {
-                if self.config_view.is_editing() {
-                    // Edit mode: Enter/Esc handled here, everything else goes to tui-input
-                    match key.code {
-                        KeyCode::Enter => {
-                            match self.config_view.confirm_edit() {
-                                Ok(()) => tracing::info!("Config field updated"),
-                                Err(msg) => tracing::error!("{msg}"),
-                            }
-                        }
-                        KeyCode::Esc => {
-                            self.config_view.cancel_edit();
-                        }
-                        _ => {
-                            self.config_view.handle_edit_event(
-                                &ratatui::crossterm::event::Event::Key(key),
-                            );
-                        }
-                    }
-                    return None;
-                }
-                // Normal mode
-                match key.code {
-                    KeyCode::Char('q') => Some(Action::Quit),
-                    KeyCode::Esc => {
-                        if self.config_view.is_right_panel_focused() {
-                            self.config_view.toggle_focus();
-                            None
-                        } else {
-                            Some(Action::SwitchScreen(Screen::Monitor))
-                        }
-                    }
-                    KeyCode::Tab => {
-                        self.config_view.toggle_focus();
-                        None
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        self.config_view.navigate_down();
-                        None
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        self.config_view.navigate_up();
-                        None
-                    }
-                    KeyCode::Enter => {
-                        if self.config_view.is_left_panel_focused() {
-                            // Activate the selected deployment
-                            let build_running = self.pipeline.started.is_some()
-                                && !self.pipeline.is_complete();
-                            let recovery_running = self.recovery_view.is_active();
-                            let selected = self.config_view.selected_deployment_name()
-                                .map(|s| s.to_string());
-                            let already_active = selected.as_deref()
-                                == Some(self.deployment_name.as_str());
+        // 3. Global shortcuts — only reached if screen didn't consume the key
+        match key.code {
+            KeyCode::Char('q') => Some(Action::Quit),
+            KeyCode::Char('1') => Some(Action::SwitchScreen(Screen::Config)),
+            KeyCode::Char('2') => Some(Action::SwitchScreen(Screen::Build)),
+            KeyCode::Char('3') => Some(Action::SwitchScreen(Screen::Monitor)),
+            KeyCode::Char('d') if self.screen != Screen::Debug => {
+                Some(Action::SwitchScreen(Screen::Debug))
+            }
+            _ => None,
+        }
+    }
 
-                            if !already_active && (build_running || recovery_running) {
-                                tracing::warn!(
-                                    "Cannot switch deployment: operation in progress"
-                                );
-                            } else if let Some((name, config)) =
-                                self.config_view.activate_selected()
-                            {
-                                let name = name.to_string();
-                                let config = config.clone();
-                                if name != self.deployment_name {
-                                    self.deployment_name = name.clone();
-                                    self.config = config;
-                                    self.status_bar.set_deployment(&name);
-                                    self.needs_reconnect = true;
-                                    // Reset components that depend on config
-                                    let thresholds =
-                                        self.config.monitoring.thresholds.clone();
-                                    let vdev_size = self
-                                        .config
-                                        .build
-                                        .omicron
-                                        .overrides
-                                        .vdev_size_bytes
-                                        .unwrap_or(42949672960);
-                                    self.disk_panel =
-                                        DiskPanel::new(thresholds, vdev_size);
-                                    self.status_panel = StatusPanel::new();
-                                    tracing::info!(
-                                        "Switched active deployment to {name}"
-                                    );
-                                }
-                            }
-                        } else {
-                            // Right panel: start editing field
-                            self.config_view.start_edit();
-                        }
-                        None
-                    }
-                    KeyCode::Char('e') => {
-                        if self.config_view.is_left_panel_focused() {
-                            self.config_view.toggle_focus();
-                        }
-                        None
-                    }
-                    _ => None,
+    /// Screen-specific key routing. Returns Consumed when the key was handled
+    /// (even if no Action is produced), Ignored when the screen doesn't care.
+    fn handle_screen_key(&mut self, key: KeyEvent) -> EventResult {
+        match self.screen {
+            Screen::Config => self.handle_config_key(key),
+            Screen::Build => self.handle_build_key(key),
+            Screen::Monitor => self.handle_monitor_key(key),
+            Screen::Debug => self.handle_debug_key(key),
+        }
+    }
+
+    fn handle_monitor_key(&mut self, key: KeyEvent) -> EventResult {
+        match self.monitor_mode {
+            MonitorMode::Dashboard => match key.code {
+                KeyCode::Esc => EventResult::Ignored, // falls through to global quit
+                KeyCode::Tab => EventResult::Consumed(Some(Action::FocusNext)),
+                KeyCode::BackTab => EventResult::Consumed(Some(Action::FocusPrev)),
+                KeyCode::Char('j') | KeyCode::Down => EventResult::Consumed(Some(Action::ScrollDown)),
+                KeyCode::Char('k') | KeyCode::Up => EventResult::Consumed(Some(Action::ScrollUp)),
+                KeyCode::Char('s') => EventResult::Consumed(Some(Action::RefreshStatus)),
+                KeyCode::Char('r') => EventResult::Consumed(Some(Action::StartRecovery)),
+                _ => EventResult::Ignored,
+            },
+            MonitorMode::Recovery => match key.code {
+                KeyCode::Esc => {
+                    self.monitor_mode = MonitorMode::Dashboard;
+                    self.recovery_view.deactivate();
+                    EventResult::Consumed(None)
+                }
+                KeyCode::Char('j') | KeyCode::Down => EventResult::Consumed(Some(Action::ScrollDown)),
+                KeyCode::Char('k') | KeyCode::Up => EventResult::Consumed(Some(Action::ScrollUp)),
+                _ => EventResult::Ignored,
+            },
+        }
+    }
+
+    fn handle_build_key(&mut self, key: KeyEvent) -> EventResult {
+        match key.code {
+            KeyCode::Esc => EventResult::Ignored, // falls through to global quit
+            KeyCode::Char('b') => EventResult::Consumed(Some(Action::StartBuild)),
+            KeyCode::Tab => {
+                self.build_view.toggle_focus();
+                EventResult::Consumed(None)
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.build_view.is_log_focused() {
+                    self.build_view.scroll_log_down();
+                } else {
+                    self.build_view.select_next_step();
+                }
+                EventResult::Consumed(None)
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if self.build_view.is_log_focused() {
+                    self.build_view.scroll_log_up();
+                } else {
+                    self.build_view.select_prev_step();
+                }
+                EventResult::Consumed(None)
+            }
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn handle_config_key(&mut self, key: KeyEvent) -> EventResult {
+        // Overlay: git ref picker / fetching — captures all input
+        if self.config_view.is_picking() {
+            if let Some(result) = self.config_view.handle_git_ref_key(key) {
+                match result {
+                    Ok(()) => tracing::info!("Config field updated"),
+                    Err(msg) => tracing::error!("{msg}"),
                 }
             }
-            Screen::Debug => match key.code {
-                KeyCode::Char('q') => Some(Action::Quit),
-                KeyCode::Esc => Some(Action::SwitchScreen(Screen::Monitor)),
-                KeyCode::Char('r') => {
-                    self.debug_view.refresh();
-                    None
+            return EventResult::Consumed(None);
+        }
+
+        // Overlay: inline text editing — captures all input
+        if self.config_view.is_editing() {
+            match key.code {
+                KeyCode::Enter => {
+                    match self.config_view.confirm_edit() {
+                        Ok(()) => tracing::info!("Config field updated"),
+                        Err(msg) => tracing::error!("{msg}"),
+                    }
                 }
-                KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown),
-                KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp),
-                _ => None,
-            },
+                KeyCode::Esc => self.config_view.cancel_edit(),
+                _ => {
+                    self.config_view.handle_edit_event(
+                        &ratatui::crossterm::event::Event::Key(key),
+                    );
+                }
+            }
+            return EventResult::Consumed(None);
+        }
+
+        // Normal config navigation
+        match key.code {
+            KeyCode::Esc => {
+                if self.config_view.is_right_panel_focused() {
+                    self.config_view.toggle_focus();
+                    EventResult::Consumed(None)
+                } else {
+                    EventResult::Consumed(Some(Action::SwitchScreen(Screen::Monitor)))
+                }
+            }
+            KeyCode::Tab => {
+                self.config_view.toggle_focus();
+                EventResult::Consumed(None)
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.config_view.navigate_down();
+                EventResult::Consumed(None)
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.config_view.navigate_up();
+                EventResult::Consumed(None)
+            }
+            KeyCode::Enter => {
+                if self.config_view.is_left_panel_focused() {
+                    let build_running = self.pipeline.started.is_some()
+                        && !self.pipeline.is_complete();
+                    let recovery_running = self.recovery_view.is_active();
+                    let selected = self.config_view.selected_deployment_name()
+                        .map(|s| s.to_string());
+                    let already_active = selected.as_deref()
+                        == Some(self.deployment_name.as_str());
+
+                    if !already_active && (build_running || recovery_running) {
+                        tracing::warn!("Cannot switch deployment: operation in progress");
+                    } else if let Some((name, config)) =
+                        self.config_view.activate_selected()
+                    {
+                        let name = name.to_string();
+                        let config = config.clone();
+                        if name != self.deployment_name {
+                            self.deployment_name = name.clone();
+                            self.config = config;
+                            self.status_bar.set_deployment(&name);
+                            self.needs_reconnect = true;
+                            let thresholds = self.config.monitoring.thresholds.clone();
+                            let vdev_size = self.config.build.omicron.overrides
+                                .vdev_size_bytes.unwrap_or(42949672960);
+                            self.disk_panel = DiskPanel::new(thresholds, vdev_size);
+                            self.status_panel = StatusPanel::new();
+                            tracing::info!("Switched active deployment to {name}");
+                        }
+                    }
+                } else {
+                    self.config_view.start_edit();
+                    if let Some(kind) = self.config_view.pending_picker() {
+                        self.fetch_picker_data(kind);
+                    }
+                }
+                EventResult::Consumed(None)
+            }
+            KeyCode::Char('e') => {
+                if self.config_view.is_left_panel_focused() {
+                    self.config_view.toggle_focus();
+                }
+                EventResult::Consumed(None)
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                if self.config_view.is_right_panel_focused() {
+                    if self.config_view.is_first_tab() {
+                        self.config_view.toggle_focus();
+                    } else {
+                        self.config_view.prev_tab();
+                    }
+                    EventResult::Consumed(None)
+                } else {
+                    EventResult::Ignored
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                if self.config_view.is_left_panel_focused() {
+                    self.config_view.toggle_focus();
+                } else {
+                    self.config_view.next_tab();
+                }
+                EventResult::Consumed(None)
+            }
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn handle_debug_key(&mut self, key: KeyEvent) -> EventResult {
+        match key.code {
+            KeyCode::Esc => EventResult::Consumed(Some(Action::SwitchScreen(Screen::Monitor))),
+            KeyCode::Char('r') => {
+                self.debug_view.refresh();
+                EventResult::Consumed(None)
+            }
+            KeyCode::Char('j') | KeyCode::Down => EventResult::Consumed(Some(Action::ScrollDown)),
+            KeyCode::Char('k') | KeyCode::Up => EventResult::Consumed(Some(Action::ScrollUp)),
+            _ => EventResult::Ignored,
         }
     }
 
@@ -576,6 +620,18 @@ impl App {
                 self.host = Some(host.clone());
                 tracing::info!("Connected to {address}");
                 self.spawn_status_poll();
+            }
+            AppEvent::GitRefsFetched { repo_url, result } => {
+                match result {
+                    Ok(refs) => {
+                        self.git_ref_cache.insert(repo_url.clone(), refs.clone());
+                        self.config_view.open_git_ref_selector(&refs);
+                    }
+                    Err(msg) => {
+                        tracing::error!("Failed to fetch refs: {msg}");
+                        self.config_view.cancel_edit();
+                    }
+                }
             }
         }
     }
@@ -821,15 +877,39 @@ impl App {
         });
     }
 
+    fn fetch_picker_data(&mut self, kind: crate::tui::components::config_view::PickerKind) {
+        use crate::tui::components::config_view::PickerKind;
+        match kind {
+            PickerKind::GitRef { ref repo_url } => {
+                // Check session cache first
+                if let Some(cached) = self.git_ref_cache.get(repo_url) {
+                    self.config_view.open_git_ref_selector(&cached);
+                    return;
+                }
+
+                // Spawn async fetch
+                let repo_url = repo_url.clone();
+                if let Some(tx) = self.app_event_tx.clone() {
+                    let url = repo_url.clone();
+                    std::thread::spawn(move || {
+                        let result = crate::git::fetch_repo_refs(&url);
+                        let _ = tx.send(Event::App(AppEvent::GitRefsFetched {
+                            repo_url: url,
+                            result,
+                        }));
+                    });
+                }
+            }
+        }
+    }
+
     fn spawn_build(&mut self) {
         let Some(tx) = self.app_event_tx.clone() else {
             return;
         };
 
-        let has_proxmox = self.config.deployment.proxmox.is_some()
-            || self.config.deployment.hypervisor.is_some();
-        if !has_proxmox {
-            tracing::warn!("Cannot build: no [proxmox] or [hypervisor] section in config");
+        if self.config.deployment.hypervisor.is_none() {
+            tracing::warn!("Cannot build: no [hypervisor] section in config");
             return;
         }
 

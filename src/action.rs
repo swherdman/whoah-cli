@@ -12,7 +12,6 @@ pub enum Screen {
 #[derive(Debug)]
 pub enum Action {
     Quit,
-    Resize(u16, u16),
     // Navigation
     SwitchScreen(Screen),
     FocusNext,
@@ -23,8 +22,16 @@ pub enum Action {
     StartBuild,
     StartRecovery,
     RefreshStatus,
-    ShowHelp,
     // State updates (from async tasks)
     UpdateStatus(Box<HostStatus>),
     RecoveryProgress(RecoveryEvent),
+}
+
+/// Key event routing result, following the Helix compositor pattern.
+/// Components return this to indicate whether they consumed the event.
+pub enum EventResult {
+    /// Event was not handled — parent should continue routing.
+    Ignored,
+    /// Event was handled — stop routing. Optionally produce an Action.
+    Consumed(Option<Action>),
 }

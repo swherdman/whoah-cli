@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::git::RepoRefs;
 use crate::ops::recover::RecoveryEvent;
 use crate::ops::status::HostStatus;
 use crate::ssh::session::SshHost;
@@ -30,6 +31,11 @@ pub enum AppEvent {
     Connected {
         address: String,
         host: Arc<SshHost>,
+    },
+    /// GitHub API fetch completed for git ref selector
+    GitRefsFetched {
+        repo_url: String,
+        result: Result<RepoRefs, String>,
     },
 }
 
