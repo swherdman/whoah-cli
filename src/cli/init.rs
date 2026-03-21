@@ -195,7 +195,7 @@ async fn run_wizard() -> Result<()> {
             hosts: {
                 let mut h = BTreeMap::new();
                 h.insert(
-                    "helios01".to_string(),
+                    name.clone(),
                     HostConfig {
                         address,
                         ssh_user,
@@ -276,7 +276,7 @@ fn build_config_from_discovered(
             hosts: {
                 let mut h = BTreeMap::new();
                 h.insert(
-                    "helios01".to_string(),
+                    name.to_string(),
                     HostConfig {
                         address: address.to_string(),
                         ssh_user: ssh_user.to_string(),
