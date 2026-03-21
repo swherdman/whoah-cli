@@ -183,6 +183,19 @@ impl BuildView {
         // Count total steps for cursor clamping
         self.total_steps = pipeline.phases.iter().map(|ph| ph.steps.len()).sum();
 
+        // Auto-advance selection to the currently running step
+        if self.focus == BuildFocus::StepList {
+            let mut idx = 0usize;
+            for phase in &pipeline.phases {
+                for step in &phase.steps {
+                    if matches!(step.status, StepStatus::Running { .. }) {
+                        self.selected_step = idx;
+                    }
+                    idx += 1;
+                }
+            }
+        }
+
         for phase in &pipeline.phases {
             // Phase header
             lines.push(self.phase_header_line(phase, p));
