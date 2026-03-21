@@ -63,37 +63,35 @@ impl StatusBarComponent {
             spans.push(Span::raw("  "));
         }
 
-        // Right-align deployment name + connection status
-        let right_info = if self.connected {
-            format!("{}  {} online ", self.deployment_name, self.host)
+        // Build right-side spans, then calculate padding from their actual width
+        let right_spans: Vec<Span> = if self.connected {
+            vec![
+                Span::styled(
+                    format!("{} ", self.deployment_name),
+                    Style::default().fg(p.text_bright).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{}  ", self.host),
+                    Style::default().fg(p.text_default),
+                ),
+                Span::styled("●", Style::default().fg(p.green_primary)),
+                Span::raw(" "),
+            ]
         } else {
-            format!("{}  connecting... ", self.deployment_name)
+            vec![
+                Span::styled(
+                    format!("{} ", self.deployment_name),
+                    Style::default().fg(p.text_bright).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("connecting... ", Style::default().fg(p.yellow_warn)),
+            ]
         };
 
-        // Calculate space needed
         let left_len: usize = spans.iter().map(|s| s.width()).sum();
-        let right_len = right_info.len();
+        let right_len: usize = right_spans.iter().map(|s| s.width()).sum();
         let padding = (area.width as usize).saturating_sub(left_len + right_len);
         spans.push(Span::raw(" ".repeat(padding)));
-
-        if self.connected {
-            spans.push(Span::styled(
-                format!("{} ", self.deployment_name),
-                Style::default().fg(p.text_bright).add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(
-                format!("{}  ", self.host),
-                Style::default().fg(p.text_default),
-            ));
-            spans.push(Span::styled("●", Style::default().fg(p.green_primary)));
-            spans.push(Span::raw(" "));
-        } else {
-            spans.push(Span::styled(
-                format!("{} ", self.deployment_name),
-                Style::default().fg(p.text_bright).add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled("connecting... ", Style::default().fg(p.yellow_warn)));
-        }
+        spans.extend(right_spans);
 
         frame.render_widget(
             Paragraph::new(Line::from(spans)).style(Style::default().bg(p.bg_hover)),

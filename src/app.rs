@@ -792,7 +792,7 @@ impl App {
                 self.needs_reconnect = true;
             }
             BuildEvent::PipelineFinished { success } => {
-                if *success {
+                if *success && !self.demo {
                     tracing::info!("Build pipeline finished — connecting to new host");
                     // Drop stale connection and connect to the (possibly new) IP
                     if let Some(host) = self.host.take() {
@@ -1083,24 +1083,10 @@ impl App {
         if self.alert_bar.message.is_some() {
             self.alert_bar.render(frame, areas.title_bar);
         } else {
-            // Render a thin status line (connected host info)
+            // Empty line — reserves space for alerts
             let p = Palette::default();
-            let spans = if self.status_bar.connected {
-                vec![
-                    Span::styled(
-                        format!(" {} ", self.status_bar.host),
-                        Style::default().fg(p.text_default),
-                    ),
-                    Span::styled("online", Style::default().fg(p.green_primary)),
-                ]
-            } else {
-                vec![Span::styled(
-                    " connecting...",
-                    Style::default().fg(p.yellow_warn),
-                )]
-            };
             frame.render_widget(
-                ratatui::widgets::Paragraph::new(Line::from(spans))
+                ratatui::widgets::Paragraph::new("")
                     .style(Style::default().bg(p.bg_hover)),
                 areas.title_bar,
             );
