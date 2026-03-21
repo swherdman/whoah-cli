@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
             // Launch TUI dashboard
             let deployment_name = config::resolve_deployment(deployment)?;
             let cfg = config::load_deployment(&deployment_name)?;
-            let mut application = app::App::new(cfg, deployment_name);
+            let mut application = app::App::new(cfg, deployment_name, cli.demo);
             application.run().await?;
         }
     }

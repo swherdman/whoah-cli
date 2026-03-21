@@ -1,3 +1,4 @@
+pub mod demo;
 pub mod deploy;
 pub mod import;
 pub mod nexus;

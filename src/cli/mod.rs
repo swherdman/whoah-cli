@@ -19,6 +19,10 @@ pub struct Cli {
     /// Increase verbosity (-v, -vv, -vvv)
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
+
+    /// Run in demo mode (simulated build pipeline, no SSH)
+    #[arg(long, global = true)]
+    pub demo: bool,
 }
 
 #[derive(Subcommand)]

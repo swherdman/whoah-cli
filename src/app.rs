@@ -80,10 +80,13 @@ pub struct App {
 
     // Git ref cache for ref selectors (session-scoped, keyed by repo URL)
     git_ref_cache: RefCache,
+
+    // Demo mode: simulate build pipeline without SSH
+    demo: bool,
 }
 
 impl App {
-    pub fn new(config: DeploymentConfig, deployment_name: String) -> Self {
+    pub fn new(config: DeploymentConfig, deployment_name: String, demo: bool) -> Self {
         let thresholds = config.monitoring.thresholds.clone();
         let vdev_size = config.build.omicron.overrides.vdev_size_bytes.unwrap_or(42949672960);
         Self {
@@ -111,6 +114,7 @@ impl App {
             cargo_tracker: CargoTracker::default(),
             xtask_tracker: XtaskTracker::default(),
             git_ref_cache: RefCache::new(),
+            demo,
         }
     }
 
@@ -121,11 +125,23 @@ impl App {
         self.app_event_tx = Some(tui.event_tx());
         tracing::info!("Starting whoah dashboard...");
 
-        // Connect to host
-        self.connect().await;
+        if !self.demo {
+            // Connect to host
+            self.connect().await;
 
-        // Initial status poll
-        self.spawn_status_poll();
+            // Initial status poll
+            self.spawn_status_poll();
+        } else {
+            // Populate Monitor screen with fake status data
+            if let Some(tx) = &self.app_event_tx {
+                let status = crate::ops::demo::demo_status(&self.config);
+                let _ = tx.send(Event::App(AppEvent::StatusUpdated(Box::new(status))));
+            }
+            let address = self.config.deployment.hosts.values().next()
+                .map(|h| h.address.as_str())
+                .unwrap_or("192.168.2.100");
+            self.status_bar.set_connected(address);
+        }
 
         while !self.should_quit {
             // Wait for next event
@@ -727,6 +743,22 @@ impl App {
                     .and_then(|(pi, si)| Some(self.pipeline.phases[pi].steps[si].name))
                     .unwrap_or("unknown");
                 self.pipeline.complete_step(id);
+
+                // In demo mode, override the duration with a realistic value
+                // and backdate pipeline.started so total_elapsed() matches
+                if self.demo {
+                    if let Some(step) = self.pipeline.step_mut(id) {
+                        step.status = crate::ops::pipeline::StepStatus::Completed {
+                            duration: crate::ops::demo::realistic_duration(id),
+                        };
+                    }
+                    let cumulative: std::time::Duration = self.pipeline.phases.iter()
+                        .flat_map(|p| &p.steps)
+                        .filter_map(|s| s.elapsed())
+                        .sum();
+                    self.pipeline.started = Some(std::time::Instant::now() - cumulative);
+                }
+
                 let dur = self.pipeline.step_mut(id)
                     .and_then(|s| s.elapsed())
                     .unwrap_or_default();
@@ -908,6 +940,11 @@ impl App {
             return;
         };
 
+        if self.demo {
+            self.spawn_demo_build(tx);
+            return;
+        }
+
         if self.config.deployment.hypervisor.is_none() {
             tracing::warn!("Cannot build: no [hypervisor] section in config");
             return;
@@ -957,6 +994,34 @@ impl App {
                         severity: Severity::Critical,
                         message: format!("Build task panicked: {e}"),
                     }));
+                }
+            }
+        });
+    }
+
+    fn spawn_demo_build(&self, tx: mpsc::UnboundedSender<Event>) {
+        let (build_tx, mut build_rx) = mpsc::unbounded_channel::<crate::event::BuildEvent>();
+
+        tokio::spawn(async move {
+            let demo_handle = tokio::spawn(async move {
+                crate::ops::demo::run_demo(build_tx).await
+            });
+
+            while let Some(event) = build_rx.recv().await {
+                let _ = tx.send(Event::App(AppEvent::Build(event)));
+            }
+
+            match demo_handle.await {
+                Ok(()) => {
+                    let _ = tx.send(Event::App(AppEvent::Build(
+                        crate::event::BuildEvent::PipelineFinished { success: true },
+                    )));
+                }
+                Err(e) => {
+                    tracing::error!("Demo task panicked: {e}");
+                    let _ = tx.send(Event::App(AppEvent::Build(
+                        crate::event::BuildEvent::PipelineFinished { success: false },
+                    )));
                 }
             }
         });
