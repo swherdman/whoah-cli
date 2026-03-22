@@ -20,6 +20,7 @@ use whoah::event::BuildEvent;
 use whoah::ops::ssh_log::LoggedSsh;
 
 #[tokio::test]
+#[ignore] // Requires live SSH to helios01 (192.168.2.209)
 async fn test_command_after_streaming() {
     let config = HostConfig {
         address: "192.168.2.209".to_string(),
@@ -92,6 +93,7 @@ async fn test_command_after_streaming() {
 /// Test using LoggedSsh (the actual wrapper used in deploy.rs)
 /// This reproduces the exact pattern: run_streaming then run
 #[tokio::test]
+#[ignore] // Requires live SSH to helios01 (192.168.2.209)
 async fn test_logged_ssh_streaming_then_run() {
     let config = HostConfig {
         address: "192.168.2.209".to_string(),
@@ -152,6 +154,7 @@ async fn test_logged_ssh_streaming_then_run() {
 }
 
 #[tokio::test]
+#[ignore] // Requires live SSH to helios01 (192.168.2.209)
 async fn test_long_streaming_then_command() {
     let config = HostConfig {
         address: "192.168.2.209".to_string(),

@@ -373,3 +373,88 @@ pub fn render_detail_lines(
 
     visible_height
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a test line set: header, editable, field (readonly), editable, header, action
+    fn test_lines() -> Vec<DetailLine> {
+        let mut lines = Vec::new();
+        push_header(&mut lines, "SECTION");       // 0: spacer, 1: header
+        push_editable(&mut lines, "a", "1", "f", "a"); // 2
+        push_field(&mut lines, "b", "2");               // 3 (readonly)
+        push_editable(&mut lines, "c", "3", "f", "c"); // 4
+        push_header(&mut lines, "SECTION2");       // 5: spacer, 6: header
+        push_danger_action(&mut lines, "Delete", LineAction::DeleteHypervisor); // 7: spacer, 8: action
+        lines
+    }
+
+    #[test]
+    fn test_next_editable_line_skips_headers_and_readonly() {
+        let lines = test_lines();
+        // From 0 (spacer) → first editable at 2
+        assert_eq!(next_editable_line(&lines, 0), Some(2));
+        // From 2 (editable) → skip readonly at 3 → editable at 4
+        assert_eq!(next_editable_line(&lines, 2), Some(4));
+        // From 4 (editable) → skip headers → action at 8
+        assert_eq!(next_editable_line(&lines, 4), Some(8));
+        // From 8 (action, last) → None
+        assert_eq!(next_editable_line(&lines, 8), None);
+    }
+
+    #[test]
+    fn test_prev_editable_line_skips_headers_and_readonly() {
+        let lines = test_lines();
+        // From 8 (action) → editable at 4
+        assert_eq!(prev_editable_line(&lines, 8), Some(4));
+        // From 4 → skip readonly at 3 → editable at 2
+        assert_eq!(prev_editable_line(&lines, 4), Some(2));
+        // From 2 → None (nothing before)
+        assert_eq!(prev_editable_line(&lines, 2), None);
+        // From 0 → None
+        assert_eq!(prev_editable_line(&lines, 0), None);
+    }
+
+    #[test]
+    fn test_first_editable_line() {
+        let lines = test_lines();
+        assert_eq!(first_editable_line(&lines), 2);
+    }
+
+    #[test]
+    fn test_first_editable_line_no_editables() {
+        let mut lines = Vec::new();
+        push_header(&mut lines, "HEADER");
+        push_field(&mut lines, "readonly", "val");
+        assert_eq!(first_editable_line(&lines), 0); // fallback
+    }
+
+    #[test]
+    fn test_ensure_visible_scroll_up() {
+        let mut offset = 5;
+        ensure_visible(3, &mut offset, 10);
+        assert_eq!(offset, 3);
+    }
+
+    #[test]
+    fn test_ensure_visible_scroll_down() {
+        let mut offset = 0;
+        ensure_visible(15, &mut offset, 10);
+        assert_eq!(offset, 6); // 15 - 10 + 1
+    }
+
+    #[test]
+    fn test_ensure_visible_already_visible() {
+        let mut offset = 2;
+        ensure_visible(5, &mut offset, 10);
+        assert_eq!(offset, 2); // no change
+    }
+
+    #[test]
+    fn test_ensure_visible_zero_height() {
+        let mut offset = 0;
+        ensure_visible(5, &mut offset, 0);
+        assert_eq!(offset, 0); // no scroll when height is 0
+    }
+}

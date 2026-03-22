@@ -50,22 +50,90 @@ pub async fn probe_ssh(host: &str, user: &str, timeout_secs: u32) -> SshProbeSta
                 return SshProbeStatus::Valid;
             }
 
-            let stderr = String::from_utf8_lossy(&result.stderr).to_lowercase();
-
-            if stderr.contains("permission denied")
-                || stderr.contains("publickey")
-                || stderr.contains("authentication")
-                || stderr.contains("no more authentication methods")
-            {
-                SshProbeStatus::AuthFailed
-            } else {
-                // Connection refused, timeout, host not found, etc.
-                SshProbeStatus::Offline
-            }
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            classify_ssh_error(&stderr)
         }
         Err(_) => {
             // ssh binary not found or other OS error
             SshProbeStatus::Offline
         }
+    }
+}
+
+/// Classify an SSH error based on stderr output.
+/// Extracted as a pure function for testability.
+fn classify_ssh_error(stderr: &str) -> SshProbeStatus {
+    let lower = stderr.to_lowercase();
+    if lower.contains("permission denied")
+        || lower.contains("publickey")
+        || lower.contains("authentication")
+        || lower.contains("no more authentication methods")
+    {
+        SshProbeStatus::AuthFailed
+    } else {
+        SshProbeStatus::Offline
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_permission_denied() {
+        assert_eq!(
+            classify_ssh_error("user@host: Permission denied (publickey)."),
+            SshProbeStatus::AuthFailed,
+        );
+    }
+
+    #[test]
+    fn test_classify_publickey() {
+        assert_eq!(
+            classify_ssh_error("Permission denied (publickey,keyboard-interactive)."),
+            SshProbeStatus::AuthFailed,
+        );
+    }
+
+    #[test]
+    fn test_classify_no_more_methods() {
+        assert_eq!(
+            classify_ssh_error("Received disconnect: No more authentication methods available"),
+            SshProbeStatus::AuthFailed,
+        );
+    }
+
+    #[test]
+    fn test_classify_connection_refused() {
+        assert_eq!(
+            classify_ssh_error("ssh: connect to host 10.0.0.1 port 22: Connection refused"),
+            SshProbeStatus::Offline,
+        );
+    }
+
+    #[test]
+    fn test_classify_connection_timed_out() {
+        assert_eq!(
+            classify_ssh_error("ssh: connect to host 10.0.0.1 port 22: Connection timed out"),
+            SshProbeStatus::Offline,
+        );
+    }
+
+    #[test]
+    fn test_classify_host_not_found() {
+        assert_eq!(
+            classify_ssh_error("ssh: Could not resolve hostname badhost: Name or service not known"),
+            SshProbeStatus::Offline,
+        );
+    }
+
+    #[test]
+    fn test_classify_empty_stderr() {
+        assert_eq!(classify_ssh_error(""), SshProbeStatus::Offline);
+    }
+
+    #[tokio::test]
+    async fn test_probe_empty_host() {
+        assert_eq!(probe_ssh("", "root", 1).await, SshProbeStatus::Offline);
     }
 }

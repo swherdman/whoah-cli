@@ -427,6 +427,10 @@ mod tests {
 
     #[test]
     fn test_is_wsl_detection() {
-        let _ = is_wsl();
+        // Verify is_wsl() returns a bool without panicking.
+        // On WSL2 this should return true; on native Linux/macOS, false.
+        let result = is_wsl();
+        // Sanity: the function should be deterministic
+        assert_eq!(result, is_wsl());
     }
 }

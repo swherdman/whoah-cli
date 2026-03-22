@@ -112,3 +112,80 @@ impl PopupPicker {
         frame.render_stateful_widget(list, inner, &mut state);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn picker() -> PopupPicker {
+        PopupPicker::new("Test", vec!["alpha".into(), "beta".into(), "gamma".into()])
+    }
+
+    #[test]
+    fn test_down_navigation() {
+        let mut p = picker();
+        assert!(matches!(p.handle_key(key(KeyCode::Down)), PopupAction::Continue));
+        assert_eq!(p.selected, 1);
+        p.handle_key(key(KeyCode::Down));
+        assert_eq!(p.selected, 2);
+        // Clamped at last item
+        p.handle_key(key(KeyCode::Down));
+        assert_eq!(p.selected, 2);
+    }
+
+    #[test]
+    fn test_up_navigation() {
+        let mut p = picker();
+        p.selected = 2;
+        p.handle_key(key(KeyCode::Up));
+        assert_eq!(p.selected, 1);
+        p.handle_key(key(KeyCode::Up));
+        assert_eq!(p.selected, 0);
+        // Clamped at 0
+        p.handle_key(key(KeyCode::Up));
+        assert_eq!(p.selected, 0);
+    }
+
+    #[test]
+    fn test_enter_returns_selected() {
+        let mut p = picker();
+        p.handle_key(key(KeyCode::Down)); // select "beta"
+        match p.handle_key(key(KeyCode::Enter)) {
+            PopupAction::Selected(idx, val) => {
+                assert_eq!(idx, 1);
+                assert_eq!(val, "beta");
+            }
+            _ => panic!("Expected Selected"),
+        }
+    }
+
+    #[test]
+    fn test_esc_cancels() {
+        let mut p = picker();
+        assert!(matches!(p.handle_key(key(KeyCode::Esc)), PopupAction::Cancel));
+    }
+
+    #[test]
+    fn test_empty_options() {
+        let mut p = PopupPicker::new("Empty", vec![]);
+        // Down does nothing
+        p.handle_key(key(KeyCode::Down));
+        assert_eq!(p.selected, 0);
+        // Enter cancels (no valid selection)
+        assert!(matches!(p.handle_key(key(KeyCode::Enter)), PopupAction::Cancel));
+    }
+
+    #[test]
+    fn test_single_option() {
+        let mut p = PopupPicker::new("One", vec!["only".into()]);
+        match p.handle_key(key(KeyCode::Enter)) {
+            PopupAction::Selected(0, val) => assert_eq!(val, "only"),
+            _ => panic!("Expected Selected(0, 'only')"),
+        }
+    }
+}

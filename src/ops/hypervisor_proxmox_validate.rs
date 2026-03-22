@@ -360,4 +360,71 @@ mod tests {
         assert!(ci.is_some());
         assert_eq!(ci.unwrap().node, "pve");
     }
+
+    #[test]
+    fn test_storage_classification_by_content() {
+        let json = r#"[
+            {"storage":"local-lvm","type":"lvmthin","content":"images,rootdir"},
+            {"storage":"local","type":"dir","content":"iso,vztmpl,backup","path":"/var/lib/vz"},
+            {"storage":"shared","type":"nfs","content":"images,iso","path":"/mnt/shared"}
+        ]"#;
+        let storages: Vec<StorageInfo> = serde_json::from_str(json).unwrap();
+
+        let disk_storages: Vec<&str> = storages.iter()
+            .filter(|s| s.content.split(',').any(|c| c.trim() == "images"))
+            .map(|s| s.storage.as_str())
+            .collect();
+        let iso_storages: Vec<&str> = storages.iter()
+            .filter(|s| s.content.split(',').any(|c| c.trim() == "iso"))
+            .map(|s| s.storage.as_str())
+            .collect();
+
+        // local-lvm has images, shared has images
+        assert_eq!(disk_storages, vec!["local-lvm", "shared"]);
+        // local has iso, shared has iso
+        assert_eq!(iso_storages, vec!["local", "shared"]);
+    }
+
+    #[test]
+    fn test_iso_filename_filtering() {
+        let filenames = vec![
+            "helios-install-vga.iso",
+            "helios-install-ttya.iso",
+            "ubuntu-24.04.iso",
+            "TrueNAS-SCALE.iso",
+            "helios-install-ttyb.iso",
+        ];
+        let filtered: Vec<&&str> = filenames.iter()
+            .filter(|n| n.starts_with("helios-install-") && n.ends_with(".iso"))
+            .collect();
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered.contains(&&"helios-install-vga.iso"));
+        assert!(filtered.contains(&&"helios-install-ttya.iso"));
+        assert!(filtered.contains(&&"helios-install-ttyb.iso"));
+    }
+
+    #[test]
+    fn test_node_exact_match_no_auto_fix() {
+        let nodes = vec![
+            NodeInfo { node: "pve".into(), status: "online".into() },
+        ];
+        let config_node = "pve";
+        let exact = nodes.iter().any(|n| n.node == config_node);
+        assert!(exact);
+        // No auto-fix needed
+        let ci = nodes.iter().find(|n| n.node.to_lowercase() == config_node.to_lowercase());
+        assert_eq!(ci.unwrap().node, config_node);
+    }
+
+    #[test]
+    fn test_node_no_match() {
+        let nodes = vec![
+            NodeInfo { node: "pve".into(), status: "online".into() },
+        ];
+        let config_node = "badnode";
+        let exact = nodes.iter().any(|n| n.node == config_node);
+        assert!(!exact);
+        let ci = nodes.iter().find(|n| n.node.to_lowercase() == config_node.to_lowercase());
+        assert!(ci.is_none());
+    }
 }
