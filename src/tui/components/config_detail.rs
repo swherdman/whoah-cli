@@ -40,6 +40,8 @@ pub enum PanelEvent {
 pub enum PanelAction {
     /// Request async git ref fetch.
     FetchGitRefs { repo_url: String },
+    /// Request SSH credential probe.
+    ProbeSsh { host: String, user: String },
     /// Panel deleted its config — parent should clean up.
     Deleted { name: String },
     /// Display an error.
@@ -49,6 +51,7 @@ pub enum PanelAction {
 /// Async data delivered from App to a panel.
 pub enum PanelData {
     GitRefs(RepoRefs),
+    SshProbeResult(crate::ssh::probe::SshProbeStatus),
 }
 
 // ── Detail line types ──────────────────────────────────────────────────
@@ -66,6 +69,8 @@ pub struct DetailLine {
     pub picker: Option<PickerKind>,
     /// If set, this line is a clickable action (e.g. delete).
     pub action: Option<LineAction>,
+    /// Optional foreground color override (for status indicators).
+    pub fg_override: Option<Color>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -108,6 +113,7 @@ pub fn push_header(lines: &mut Vec<DetailLine>, title: &str) {
         raw_value: None,
         picker: None,
         action: None,
+        fg_override: None,
     });
     lines.push(DetailLine {
         text: format!("  {title}"),
@@ -116,6 +122,7 @@ pub fn push_header(lines: &mut Vec<DetailLine>, title: &str) {
         raw_value: None,
         picker: None,
         action: None,
+        fg_override: None,
     });
 }
 
@@ -127,6 +134,7 @@ pub fn push_field(lines: &mut Vec<DetailLine>, label: &str, value: &str) {
         raw_value: None,
         picker: None,
         action: None,
+        fg_override: None,
     });
 }
 
@@ -147,6 +155,7 @@ pub fn push_editable(
         raw_value: Some(value.to_string()),
         picker: None,
         action: None,
+        fg_override: None,
     });
 }
 
@@ -168,6 +177,7 @@ pub fn push_pickable(
         raw_value: Some(value.to_string()),
         picker: Some(kind),
         action: None,
+        fg_override: None,
     });
 }
 
@@ -179,6 +189,7 @@ pub fn push_danger_action(lines: &mut Vec<DetailLine>, text: &str, action: LineA
         raw_value: None,
         picker: None,
         action: None,
+        fg_override: None,
     });
     lines.push(DetailLine {
         text: format!("  {text}"),
@@ -187,6 +198,7 @@ pub fn push_danger_action(lines: &mut Vec<DetailLine>, text: &str, action: LineA
         raw_value: None,
         picker: None,
         action: Some(action),
+        fg_override: None,
     });
 }
 
@@ -290,7 +302,7 @@ pub fn render_detail_lines(
                 }
             }
 
-            let base_style = match dl.style {
+            let mut base_style = match dl.style {
                 DetailStyle::SectionHeader => Style::default()
                     .fg(p.text_bright)
                     .add_modifier(Modifier::BOLD),
@@ -298,6 +310,9 @@ pub fn render_detail_lines(
                 DetailStyle::EditableField => Style::default().fg(p.text_default),
                 DetailStyle::DangerAction => Style::default().fg(p.red_error),
             };
+            if let Some(color) = dl.fg_override {
+                base_style = base_style.fg(color);
+            }
 
             if is_selected {
                 let highlight = if dl.field.is_some() || dl.action.is_some() {

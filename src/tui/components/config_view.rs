@@ -43,6 +43,8 @@ pub enum ConfigViewEvent {
     RequestActivation { name: String },
     /// Request async git ref fetch.
     FetchGitRefs { repo_url: String },
+    /// Request SSH credential probe.
+    ProbeSsh { host: String, user: String },
     /// A hypervisor was deleted.
     HypervisorDeleted { name: String },
 }
@@ -157,8 +159,7 @@ impl ConfigView {
                 }
             }
             KeyCode::Tab => {
-                self.toggle_focus();
-                ConfigViewEvent::Consumed
+                self.toggle_focus().unwrap_or(ConfigViewEvent::Consumed)
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.focus == ConfigFocus::LeftPanel {
@@ -185,7 +186,7 @@ impl ConfigView {
             KeyCode::Enter => self.handle_enter(key),
             KeyCode::Char('e') => {
                 if self.focus == ConfigFocus::LeftPanel {
-                    self.toggle_focus();
+                    return self.toggle_focus().unwrap_or(ConfigViewEvent::Consumed);
                 }
                 ConfigViewEvent::Consumed
             }
@@ -207,8 +208,7 @@ impl ConfigView {
             }
             KeyCode::Char('l') | KeyCode::Right => {
                 if self.focus == ConfigFocus::LeftPanel {
-                    self.toggle_focus();
-                    ConfigViewEvent::Consumed
+                    return self.toggle_focus().unwrap_or(ConfigViewEvent::Consumed);
                 } else if let Some(panel) = self.active_panel_mut() {
                     match panel.handle_key(key) {
                         PanelEvent::Ignored => ConfigViewEvent::Consumed, // already on last tab, stay
@@ -310,6 +310,9 @@ impl ConfigView {
                 PanelAction::FetchGitRefs { repo_url } => {
                     ConfigViewEvent::FetchGitRefs { repo_url }
                 }
+                PanelAction::ProbeSsh { host, user } => {
+                    ConfigViewEvent::ProbeSsh { host, user }
+                }
                 PanelAction::Deleted { ref name } => {
                     let name = name.clone();
                     self.handle_hypervisor_deleted(&name);
@@ -339,10 +342,10 @@ impl ConfigView {
                 ConfigSection::Hypervisors => {
                     if self.is_add_entry_selected() {
                         self.start_create_flow();
+                        ConfigViewEvent::Consumed
                     } else {
-                        self.toggle_focus();
+                        self.toggle_focus().unwrap_or(ConfigViewEvent::Consumed)
                     }
-                    ConfigViewEvent::Consumed
                 }
             }
         } else {
@@ -356,15 +359,32 @@ impl ConfigView {
         }
     }
 
-    fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
+    /// Toggle focus between panels. Returns a ConfigViewEvent if the focus change
+    /// triggers an async action (e.g. SSH probe when entering hypervisor panel).
+    fn toggle_focus(&mut self) -> Option<ConfigViewEvent> {
+        match self.focus {
             ConfigFocus::LeftPanel => {
-                // When entering right panel, tell the panel to focus its first field
-                // (panels handle this internally via their own focus_first_editable)
-                ConfigFocus::RightPanel
+                self.focus = ConfigFocus::RightPanel;
+                self.request_panel_probe()
             }
-            ConfigFocus::RightPanel => ConfigFocus::LeftPanel,
-        };
+            ConfigFocus::RightPanel => {
+                self.focus = ConfigFocus::LeftPanel;
+                None
+            }
+        }
+    }
+
+    /// If the active panel is a HypervisorPanel with a non-empty host,
+    /// request an SSH credential probe.
+    fn request_panel_probe(&mut self) -> Option<ConfigViewEvent> {
+        if let ActivePanel::Hypervisor(panel) = &mut self.active_panel {
+            if let Some(action) = panel.request_probe() {
+                if let PanelAction::ProbeSsh { host, user } = action {
+                    return Some(ConfigViewEvent::ProbeSsh { host, user });
+                }
+            }
+        }
+        None
     }
 
     // --- Left panel navigation ---

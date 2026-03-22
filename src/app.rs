@@ -389,6 +389,10 @@ impl App {
                 self.fetch_picker_data_for_url(&repo_url);
                 EventResult::Consumed(None)
             }
+            ConfigViewEvent::ProbeSsh { host, user } => {
+                self.spawn_ssh_probe(&host, &user);
+                EventResult::Consumed(None)
+            }
             ConfigViewEvent::HypervisorDeleted { name } => {
                 tracing::info!("Hypervisor '{name}' deleted");
                 EventResult::Consumed(None)
@@ -579,6 +583,12 @@ impl App {
                         self.config_view.cancel_fetch();
                     }
                 }
+            }
+            AppEvent::SshProbeResult { host, user, status } => {
+                tracing::debug!("SSH probe {user}@{host}: {status:?}");
+                self.config_view.deliver_data(
+                    crate::tui::components::config_detail::PanelData::SshProbeResult(*status),
+                );
             }
         }
     }
@@ -864,6 +874,22 @@ impl App {
                 }));
             });
         }
+    }
+
+    fn spawn_ssh_probe(&mut self, host: &str, user: &str) {
+        let Some(tx) = self.app_event_tx.clone() else {
+            return;
+        };
+        let host = host.to_string();
+        let user = user.to_string();
+        tokio::spawn(async move {
+            let status = crate::ssh::probe::probe_ssh(&host, &user, 5).await;
+            let _ = tx.send(Event::App(AppEvent::SshProbeResult {
+                host,
+                user,
+                status,
+            }));
+        });
     }
 
     fn spawn_build(&mut self) {

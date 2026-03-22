@@ -7,13 +7,14 @@ use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
 use super::config_detail::{
-    self, ConfigPanel, DetailLine, DetailStyle, LineAction, PanelAction, PanelEvent,
+    self, ConfigPanel, DetailLine, DetailStyle, LineAction, PanelAction, PanelData, PanelEvent,
     push_danger_action, push_editable, push_field, push_header, render_detail_lines,
 };
 use super::popup_picker::{PopupAction, PopupPicker};
 use crate::config::editor::{delete_hypervisor, update_hypervisor_field};
 use crate::config::loader::load_hypervisor;
 use crate::config::types::{HypervisorConfig, HypervisorType};
+use crate::ssh::probe::SshProbeStatus;
 use crate::tui::theme::Palette;
 
 enum EditMode {
@@ -33,6 +34,9 @@ pub struct HypervisorPanel {
     scroll_offset: usize,
     edit_mode: EditMode,
     visible_height: Cell<usize>,
+
+    /// SSH credential probe status.
+    ssh_status: SshProbeStatus,
 }
 
 impl HypervisorPanel {
@@ -50,6 +54,7 @@ impl HypervisorPanel {
             scroll_offset: 0,
             edit_mode: EditMode::Viewing,
             visible_height: Cell::new(0),
+            ssh_status: SshProbeStatus::Unknown,
         };
         panel.rebuild_lines();
         panel.selected = config_detail::first_editable_line(&panel.lines);
@@ -58,6 +63,21 @@ impl HypervisorPanel {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Request an SSH credential probe if the host is non-empty.
+    /// Sets status to Checking and returns the PanelAction for the caller to dispatch.
+    pub fn request_probe(&mut self) -> Option<PanelAction> {
+        if self.config.credentials.host.is_empty() {
+            self.ssh_status = SshProbeStatus::Unknown;
+            self.rebuild_lines();
+            return None;
+        }
+        let host = self.config.credentials.host.clone();
+        let user = self.config.credentials.ssh_user.clone();
+        self.ssh_status = SshProbeStatus::Checking;
+        self.rebuild_lines();
+        Some(PanelAction::ProbeSsh { host, user })
     }
 
     // --- Navigation ---
@@ -125,13 +145,29 @@ impl HypervisorPanel {
         PanelEvent::Consumed
     }
 
-    fn confirm_edit(&mut self) -> Result<(), String> {
+    /// Confirm the edit, persist to disk, reload.
+    /// Returns Ok(Some(PanelAction)) if a re-probe should be triggered.
+    fn confirm_edit(&mut self) -> Result<Option<PanelAction>, String> {
         let EditMode::Editing { ref input } = self.edit_mode else {
-            return Ok(());
+            return Ok(None);
         };
         let new_value = input.value().to_string();
+        // Capture the field path before changing edit_mode
+        let field_path = self.lines.get(self.selected)
+            .and_then(|l| l.field.as_ref())
+            .map(|f| f.path.clone());
         self.edit_mode = EditMode::Viewing;
-        self.persist_field(&new_value)
+        self.persist_field(&new_value)?;
+
+        // Re-probe if a credential field was edited
+        let is_credential = field_path.as_deref()
+            .map(|p| p == "credentials.host" || p == "credentials.ssh_user")
+            .unwrap_or(false);
+        if is_credential {
+            Ok(self.request_probe())
+        } else {
+            Ok(None)
+        }
     }
 
     fn persist_field(&mut self, new_value: &str) -> Result<(), String> {
@@ -222,8 +258,36 @@ impl HypervisorPanel {
             "hypervisor.type",
         );
 
-        // CREDENTIALS section
-        push_header(&mut lines, "CREDENTIALS");
+        // CREDENTIALS section with SSH status indicator
+        {
+            let (dot, color) = match self.ssh_status {
+                SshProbeStatus::Unknown => ("●", Palette::default().text_disabled),
+                SshProbeStatus::Checking => ("●", Palette::default().text_disabled),
+                SshProbeStatus::Valid => ("●", Palette::default().green_primary),
+                SshProbeStatus::AuthFailed => ("●", Palette::default().red_error),
+                SshProbeStatus::Offline => ("●", Palette::default().yellow_warn),
+            };
+            // Spacer line
+            lines.push(DetailLine {
+                text: String::new(),
+                style: DetailStyle::SectionHeader,
+                field: None,
+                raw_value: None,
+                picker: None,
+                action: None,
+                fg_override: None,
+            });
+            // Header with colored dot
+            lines.push(DetailLine {
+                text: format!("  CREDENTIALS {dot}"),
+                style: DetailStyle::SectionHeader,
+                field: None,
+                raw_value: None,
+                picker: None,
+                action: None,
+                fg_override: Some(color),
+            });
+        }
         push_editable(
             &mut lines,
             "host",
@@ -259,6 +323,7 @@ impl HypervisorPanel {
                 raw_value: None,
                 picker: None,
                 action: None,
+                fg_override: None,
             });
             lines.push(DetailLine {
                 text: format!("  Delete hypervisor (referenced by {refs})"),
@@ -267,6 +332,7 @@ impl HypervisorPanel {
                 raw_value: None,
                 picker: None,
                 action: None,
+                fg_override: None,
             });
 
             push_header(&mut lines, "REFERENCED BY");
@@ -340,8 +406,10 @@ impl ConfigPanel for HypervisorPanel {
         if let EditMode::Editing { .. } = self.edit_mode {
             match key.code {
                 KeyCode::Enter => {
-                    if let Err(msg) = self.confirm_edit() {
-                        return PanelEvent::Action(PanelAction::Error(msg));
+                    match self.confirm_edit() {
+                        Err(msg) => return PanelEvent::Action(PanelAction::Error(msg)),
+                        Ok(Some(action)) => return PanelEvent::Action(action),
+                        Ok(None) => {}
                     }
                 }
                 KeyCode::Esc => self.edit_mode = EditMode::Viewing,
@@ -446,6 +514,13 @@ impl ConfigPanel for HypervisorPanel {
         // Overlay: type picker
         if let EditMode::TypePicker { ref picker } = self.edit_mode {
             picker.render(frame, area, p);
+        }
+    }
+
+    fn receive_data(&mut self, data: PanelData) {
+        if let PanelData::SshProbeResult(status) = data {
+            self.ssh_status = status;
+            self.rebuild_lines();
         }
     }
 }

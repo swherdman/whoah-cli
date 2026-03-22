@@ -1,5 +1,6 @@
 pub mod direct;
 pub mod mock;
+pub mod probe;
 pub mod registry;
 pub mod session;
 

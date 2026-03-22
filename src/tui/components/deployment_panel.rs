@@ -1027,6 +1027,7 @@ impl ConfigPanel for DeploymentPanel {
                 let selector = GitRefSelector::new(current, refs);
                 self.edit_mode = EditMode::GitRefSelect { selector };
             }
+            _ => {} // Ignore data types not relevant to this panel
         }
     }
 }

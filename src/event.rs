@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::git::RepoRefs;
 use crate::ops::recover::RecoveryEvent;
 use crate::ops::status::HostStatus;
+use crate::ssh::probe::SshProbeStatus;
 use crate::ssh::session::SshHost;
 
 #[derive(Debug)]
@@ -36,6 +37,12 @@ pub enum AppEvent {
     GitRefsFetched {
         repo_url: String,
         result: Result<RepoRefs, String>,
+    },
+    /// SSH credential probe completed
+    SshProbeResult {
+        host: String,
+        user: String,
+        status: SshProbeStatus,
     },
 }
 
