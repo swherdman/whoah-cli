@@ -54,6 +54,7 @@ pub enum PanelData {
 // ── Detail line types ──────────────────────────────────────────────────
 
 /// A single line in a panel's detail view.
+#[derive(Clone)]
 pub struct DetailLine {
     pub text: String,
     pub style: DetailStyle,
@@ -217,6 +218,47 @@ pub fn ensure_visible(selected: usize, scroll_offset: &mut usize, visible_height
     }
 }
 
+/// Render a tui_input::Input value with a visible cursor as a Line.
+/// `label` is rendered in `label_style`, the input text + cursor in bright/hover palette colors.
+pub fn render_input_line<'a>(input: &Input, label: &str, palette: &Palette) -> Line<'a> {
+    let p = palette;
+    let value = input.value();
+    let cursor = input.visual_cursor();
+    let (before, rest) = value.split_at(
+        value
+            .char_indices()
+            .nth(cursor)
+            .map(|(b, _)| b)
+            .unwrap_or(value.len()),
+    );
+    let cursor_str: String = rest
+        .chars()
+        .next()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| " ".to_string());
+    let after_start = cursor_str.len().min(rest.len());
+    let after = &rest[after_start..];
+
+    Line::from(vec![
+        Span::styled(
+            format!("{label}: "),
+            Style::default().fg(p.green_primary),
+        ),
+        Span::styled(
+            before.to_string(),
+            Style::default().fg(p.text_bright).bg(p.bg_hover),
+        ),
+        Span::styled(
+            cursor_str,
+            Style::default().fg(p.bg_base).bg(p.text_bright),
+        ),
+        Span::styled(
+            after.to_string(),
+            Style::default().fg(p.text_bright).bg(p.bg_hover),
+        ),
+    ])
+}
+
 // ── Shared rendering ───────────────────────────────────────────────────
 
 /// Render a slice of DetailLines with selection highlight, scroll, and optional
@@ -244,41 +286,7 @@ pub fn render_detail_lines(
             if is_editing {
                 if let Some(input) = edit_input {
                     let label = dl.text.split(':').next().unwrap_or("    ?");
-                    let value = input.value();
-                    let cursor = input.visual_cursor();
-                    let (before, rest) = value.split_at(
-                        value
-                            .char_indices()
-                            .nth(cursor)
-                            .map(|(b, _)| b)
-                            .unwrap_or(value.len()),
-                    );
-                    let cursor_str: String = rest
-                        .chars()
-                        .next()
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| " ".to_string());
-                    let after_start = cursor_str.len().min(rest.len());
-                    let after = &rest[after_start..];
-
-                    return Line::from(vec![
-                        Span::styled(
-                            format!("{label}: "),
-                            Style::default().fg(p.green_primary),
-                        ),
-                        Span::styled(
-                            before.to_string(),
-                            Style::default().fg(p.text_bright).bg(p.bg_hover),
-                        ),
-                        Span::styled(
-                            cursor_str,
-                            Style::default().fg(p.bg_base).bg(p.text_bright),
-                        ),
-                        Span::styled(
-                            after.to_string(),
-                            Style::default().fg(p.text_bright).bg(p.bg_hover),
-                        ),
-                    ]);
+                    return render_input_line(input, label, p);
                 }
             }
 

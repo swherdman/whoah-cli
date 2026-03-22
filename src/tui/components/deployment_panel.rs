@@ -2,12 +2,12 @@ use std::cell::Cell;
 
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEvent};
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Tabs};
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
 use super::config_detail::{
-    self, ConfigPanel, DetailLine, DetailStyle, PickerKind, PanelAction, PanelData, PanelEvent,
+    self, ConfigPanel, DetailLine, PickerKind, PanelAction, PanelData, PanelEvent,
     push_editable, push_field, push_header, push_pickable, render_detail_lines,
 };
 use super::git_ref_selector::{GitRefSelector, SelectorAction};
@@ -302,34 +302,17 @@ impl DeploymentPanel {
     // --- Rendering ---
 
     fn render_tab_row(&self, frame: &mut Frame, area: Rect, p: &Palette) {
-        let mut spans: Vec<Span> = Vec::new();
-
-        for (i, tab) in ConfigTab::ALL.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::styled(
-                    " │ ",
-                    Style::default().fg(p.border_default),
-                ));
-            }
-            if *tab == self.active_tab {
-                spans.push(Span::styled(
-                    tab.label(),
-                    Style::default()
-                        .fg(p.green_primary)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            } else {
-                spans.push(Span::styled(
-                    tab.label(),
-                    Style::default().fg(p.text_disabled),
-                ));
-            }
-        }
-
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::default().bg(p.bg_panel)),
-            area,
-        );
+        let titles: Vec<&str> = ConfigTab::ALL.iter().map(|t| t.label()).collect();
+        let tabs = Tabs::new(titles)
+            .select(self.tab_idx())
+            .style(Style::default().fg(p.text_disabled).bg(p.bg_panel))
+            .highlight_style(
+                Style::default()
+                    .fg(p.green_primary)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .divider("│");
+        frame.render_widget(tabs, area);
     }
 
     // --- Detail line building ---

@@ -7,7 +7,7 @@ use super::Component;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
-use super::config_detail::{ConfigPanel, PanelAction, PanelData, PanelEvent};
+use super::config_detail::{self, ConfigPanel, PanelAction, PanelData, PanelEvent};
 use super::deployment_panel::DeploymentPanel;
 use super::hypervisor_panel::HypervisorPanel;
 use super::popup_picker::{PopupAction, PopupPicker};
@@ -163,18 +163,24 @@ impl ConfigView {
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.focus == ConfigFocus::LeftPanel {
                     self.left_panel_down();
+                    ConfigViewEvent::Consumed
                 } else if let Some(panel) = self.active_panel_mut() {
-                    panel.handle_key(key);
+                    let event = panel.handle_key(key);
+                    self.dispatch_panel_event(event)
+                } else {
+                    ConfigViewEvent::Consumed
                 }
-                ConfigViewEvent::Consumed
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 if self.focus == ConfigFocus::LeftPanel {
                     self.left_panel_up();
+                    ConfigViewEvent::Consumed
                 } else if let Some(panel) = self.active_panel_mut() {
-                    panel.handle_key(key);
+                    let event = panel.handle_key(key);
+                    self.dispatch_panel_event(event)
+                } else {
+                    ConfigViewEvent::Consumed
                 }
-                ConfigViewEvent::Consumed
             }
             KeyCode::Enter => self.handle_enter(key),
             KeyCode::Char('e') => {
@@ -490,7 +496,7 @@ impl ConfigView {
     }
 
     /// Handle HypervisorDeleted event — refresh list, select something else.
-    fn handle_hypervisor_deleted(&mut self, deleted_name: &str) {
+    fn handle_hypervisor_deleted(&mut self, _deleted_name: &str) {
         self.hypervisors = list_hypervisors().unwrap_or_default();
         if self.hypervisors.is_empty() {
             // No hypervisors left, switch to deployments
@@ -741,32 +747,7 @@ impl ConfigView {
                 frame.render_widget(block, popup_area);
 
                 if popup_inner.height > 0 {
-                    let value = input.value();
-                    let cursor = input.visual_cursor();
-                    let (before, rest) = value.split_at(
-                        value
-                            .char_indices()
-                            .nth(cursor)
-                            .map(|(b, _)| b)
-                            .unwrap_or(value.len()),
-                    );
-                    let cursor_str: String = rest
-                        .chars()
-                        .next()
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| " ".to_string());
-                    let after_start = cursor_str.len().min(rest.len());
-                    let after = &rest[after_start..];
-
-                    let line = Line::from(vec![
-                        Span::styled(" Name: ", Style::default().fg(p.text_tertiary)),
-                        Span::styled(before.to_string(), Style::default().fg(p.text_bright)),
-                        Span::styled(
-                            cursor_str,
-                            Style::default().fg(p.bg_base).bg(p.text_bright),
-                        ),
-                        Span::styled(after.to_string(), Style::default().fg(p.text_bright)),
-                    ]);
+                    let line = config_detail::render_input_line(input, " Name", p);
                     frame.render_widget(Paragraph::new(line), popup_inner);
                 }
             }

@@ -7,7 +7,7 @@ use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
 use super::config_detail::{
-    self, ConfigPanel, DetailLine, DetailStyle, LineAction, PanelAction, PanelData, PanelEvent,
+    self, ConfigPanel, DetailLine, DetailStyle, LineAction, PanelAction, PanelEvent,
     push_danger_action, push_editable, push_field, push_header, render_detail_lines,
 };
 use super::popup_picker::{PopupAction, PopupPicker};
@@ -163,8 +163,10 @@ impl HypervisorPanel {
 
     fn start_delete(&mut self) -> PanelEvent {
         if !self.referencing_deployments.is_empty() {
-            // Can't delete — referenced
-            return PanelEvent::Consumed;
+            let refs = self.referencing_deployments.join(", ");
+            return PanelEvent::Action(PanelAction::Error(format!(
+                "Cannot delete: referenced by {refs}"
+            )));
         }
         self.edit_mode = EditMode::DeleteConfirm;
         PanelEvent::Consumed
@@ -397,29 +399,18 @@ impl ConfigPanel for HypervisorPanel {
 
         if delete_confirm {
             // Render lines with the delete line replaced by confirmation text
-            let mut modified_lines: Vec<DetailLine> = Vec::new();
-            for (i, line) in self.lines.iter().enumerate() {
+            let modified_lines: Vec<DetailLine> = self.lines.iter().map(|line| {
                 if line.action == Some(LineAction::DeleteHypervisor) {
-                    modified_lines.push(DetailLine {
+                    DetailLine {
                         text: format!("  Delete {}? Enter to confirm, Esc to cancel", self.name),
                         style: DetailStyle::DangerAction,
-                        field: None,
-                        raw_value: None,
-                        picker: None,
                         action: Some(LineAction::DeleteHypervisor),
-                    });
+                        ..line.clone()
+                    }
                 } else {
-                    // Can't clone DetailLine easily, so re-create with refs
-                    modified_lines.push(DetailLine {
-                        text: line.text.clone(),
-                        style: line.style,
-                        field: line.field.clone(),
-                        raw_value: line.raw_value.clone(),
-                        picker: line.picker.clone(),
-                        action: line.action.clone(),
-                    });
+                    line.clone()
                 }
-            }
+            }).collect();
 
             let vis_h = render_detail_lines(
                 frame,
