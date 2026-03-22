@@ -401,6 +401,18 @@ impl App {
                 self.spawn_iso_download(&host, &user, &iso_storage_path, &filename);
                 EventResult::Consumed(None)
             }
+            ConfigViewEvent::ListProxmoxVms { name, host, user, hypervisor_ref, import } => {
+                self.spawn_list_proxmox_vms(&name, &host, &user, &hypervisor_ref, import);
+                EventResult::Consumed(None)
+            }
+            ConfigViewEvent::QueryProxmoxVmConfig { name, host, user, hypervisor_ref, vmid } => {
+                self.spawn_query_proxmox_vm(&name, &host, &user, &hypervisor_ref, vmid);
+                EventResult::Consumed(None)
+            }
+            ConfigViewEvent::DiscoverHost { name, host, user, hypervisor_ref } => {
+                self.spawn_host_discovery(&name, &host, &user, hypervisor_ref.as_deref());
+                EventResult::Consumed(None)
+            }
             ConfigViewEvent::HypervisorDeleted { name } => {
                 tracing::info!("Hypervisor '{name}' deleted");
                 EventResult::Consumed(None)
@@ -606,6 +618,56 @@ impl App {
                 self.config_view.deliver_data(
                     crate::tui::components::config_detail::PanelData::DownloadProgress { percent: *percent },
                 );
+            }
+            AppEvent::ProxmoxVmList { name, host, user, node: _, hypervisor_ref, import, result } => {
+                match result {
+                    Ok(vms) => {
+                        self.config_view.handle_proxmox_vm_list(
+                            name.clone(), host.clone(), user.clone(),
+                            hypervisor_ref.clone(), *import, vms.clone(),
+                        );
+                    }
+                    Err(ref msg) => {
+                        tracing::error!("Failed to list VMs: {msg}");
+                        // Fall back to manual vmid entry
+                        self.config_view.handle_proxmox_vm_list(
+                            name.clone(), host.clone(), user.clone(),
+                            hypervisor_ref.clone(), false, vec![],
+                        );
+                    }
+                }
+            }
+            AppEvent::ProxmoxVmConfig { name, host, user, hypervisor_ref, result } => {
+                match result {
+                    Ok(vm_config) => {
+                        self.config_view.handle_proxmox_vm_config(
+                            name.clone(), host.clone(), user.clone(),
+                            hypervisor_ref.clone(), vm_config.clone(),
+                        );
+                        // Also trigger host discovery for network/build config
+                        self.spawn_host_discovery(
+                            name, host, user, Some(hypervisor_ref.as_str()),
+                        );
+                    }
+                    Err(ref msg) => {
+                        tracing::error!("Failed to query VM config: {msg}");
+                    }
+                }
+            }
+            AppEvent::HostDiscoveryResult { name, host, user, hypervisor_ref, result } => {
+                match result {
+                    Ok(discovered) => {
+                        tracing::info!("Discovery complete for {user}@{host}");
+                        self.config_view.create_discovered_deployment(
+                            name, host, user, hypervisor_ref.as_deref(), &discovered,
+                        );
+                    }
+                    Err(ref msg) => {
+                        tracing::error!("Discovery failed: {msg}. Deployment created with placeholder config.");
+                        // Placeholder deployment already exists — just reload the panel
+                        self.config_view.reload_active_deployment();
+                    }
+                }
             }
             AppEvent::IsoDownloadResult { filename, result } => {
                 match result {
@@ -952,6 +1014,108 @@ impl App {
                 &host, &user, &proxmox_config,
             ).await;
             let _ = tx.send(Event::App(AppEvent::ProxmoxValidated(validation)));
+        });
+    }
+
+    fn spawn_list_proxmox_vms(
+        &mut self,
+        name: &str,
+        host: &str,
+        user: &str,
+        hypervisor_ref: &str,
+        import: bool,
+    ) {
+        let Some(tx) = self.app_event_tx.clone() else { return };
+        let name = name.to_string();
+        let host = host.to_string();
+        let user = user.to_string();
+        let hypervisor_ref = hypervisor_ref.to_string();
+        // Get node name from hypervisor config
+        let node = crate::config::loader::load_hypervisor(&hypervisor_ref)
+            .ok()
+            .and_then(|h| h.proxmox.map(|p| p.node))
+            .unwrap_or_else(|| "pve".into());
+        let hyp_host = crate::config::loader::load_hypervisor(&hypervisor_ref)
+            .ok()
+            .map(|h| h.credentials.host)
+            .unwrap_or_else(|| host.clone());
+        let hyp_user = crate::config::loader::load_hypervisor(&hypervisor_ref)
+            .ok()
+            .map(|h| h.credentials.ssh_user)
+            .unwrap_or_else(|| "root".into());
+        tokio::spawn(async move {
+            let result = crate::ops::hypervisor_proxmox_validate::list_vms(&hyp_host, &hyp_user, &node)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Event::App(AppEvent::ProxmoxVmList {
+                name, host, user, node, hypervisor_ref, import, result,
+            }));
+        });
+    }
+
+    fn spawn_query_proxmox_vm(
+        &mut self,
+        name: &str,
+        host: &str,
+        user: &str,
+        hypervisor_ref: &str,
+        vmid: u32,
+    ) {
+        let Some(tx) = self.app_event_tx.clone() else { return };
+        let name = name.to_string();
+        let host = host.to_string();
+        let user = user.to_string();
+        let hypervisor_ref = hypervisor_ref.to_string();
+        let node = crate::config::loader::load_hypervisor(&hypervisor_ref)
+            .ok()
+            .and_then(|h| h.proxmox.map(|p| p.node))
+            .unwrap_or_else(|| "pve".into());
+        let hyp_host = crate::config::loader::load_hypervisor(&hypervisor_ref)
+            .ok()
+            .map(|h| h.credentials.host)
+            .unwrap_or_else(|| host.clone());
+        let hyp_user = crate::config::loader::load_hypervisor(&hypervisor_ref)
+            .ok()
+            .map(|h| h.credentials.ssh_user)
+            .unwrap_or_else(|| "root".into());
+        tokio::spawn(async move {
+            let result = crate::ops::hypervisor_proxmox_validate::query_vm_config(
+                &hyp_host, &hyp_user, &node, vmid,
+            )
+            .await
+            .map_err(|e| e.to_string());
+            let _ = tx.send(Event::App(AppEvent::ProxmoxVmConfig {
+                name, host, user, hypervisor_ref, result,
+            }));
+        });
+    }
+
+    fn spawn_host_discovery(
+        &mut self,
+        name: &str,
+        host: &str,
+        user: &str,
+        hypervisor_ref: Option<&str>,
+    ) {
+        let Some(tx) = self.app_event_tx.clone() else {
+            return;
+        };
+        let name = name.to_string();
+        let host = host.to_string();
+        let user = user.to_string();
+        let hypervisor_ref = hypervisor_ref.map(|s| s.to_string());
+        tracing::info!("Discovering config from {user}@{host}...");
+        tokio::spawn(async move {
+            let result = crate::ops::discover::discover_config(&host, &user)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Event::App(AppEvent::HostDiscoveryResult {
+                name,
+                host,
+                user,
+                hypervisor_ref,
+                result,
+            }));
         });
     }
 

@@ -35,6 +35,7 @@ openssh = { version = "0.11", features = ["process-mux", "native-mux"] }
 
 # System
 libc = "0.2"
+whoami = "1"
 
 # Config
 toml = "0.8"

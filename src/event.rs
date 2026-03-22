@@ -52,6 +52,32 @@ pub enum AppEvent {
         filename: String,
         percent: f32,
     },
+    /// Proxmox VM list query completed
+    ProxmoxVmList {
+        name: String,
+        host: String,
+        user: String,
+        node: String,
+        hypervisor_ref: String,
+        import: bool,
+        result: Result<Vec<crate::ops::hypervisor_proxmox_validate::ProxmoxVm>, String>,
+    },
+    /// Proxmox VM config query completed (for existing deployment import)
+    ProxmoxVmConfig {
+        name: String,
+        host: String,
+        user: String,
+        hypervisor_ref: String,
+        result: Result<crate::config::types::VmConfig, String>,
+    },
+    /// Host discovery completed for deployment import
+    HostDiscoveryResult {
+        name: String,
+        host: String,
+        user: String,
+        hypervisor_ref: Option<String>,
+        result: Result<crate::ops::discover::DiscoveredConfig, String>,
+    },
     /// ISO download completed
     IsoDownloadResult {
         filename: String,

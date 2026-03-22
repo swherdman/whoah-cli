@@ -88,6 +88,45 @@ struct IsoInfo {
     volid: String,
 }
 
+/// VM info from `pvesh get /nodes/{node}/qemu`.
+#[derive(Debug, Deserialize)]
+struct QemuVmInfo {
+    vmid: u32,
+    name: String,
+    #[allow(dead_code)]
+    status: String,
+}
+
+/// VM config from `pvesh get /nodes/{node}/qemu/{vmid}/config`.
+#[derive(Debug, Deserialize)]
+struct QemuVmConfig {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default = "default_cores")]
+    cores: u32,
+    #[serde(default = "default_sockets")]
+    sockets: u32,
+    #[serde(default)]
+    memory: Option<String>,
+    #[serde(default)]
+    cpu: Option<String>,
+    #[serde(default)]
+    ostype: Option<String>,
+    // Disk: could be sata0, scsi0, or ide0
+    #[serde(default)]
+    sata0: Option<String>,
+    #[serde(default)]
+    scsi0: Option<String>,
+    #[serde(default)]
+    ide0: Option<String>,
+    // Network
+    #[serde(default)]
+    net0: Option<String>,
+}
+
+fn default_cores() -> u32 { 2 }
+fn default_sockets() -> u32 { 1 }
+
 // ── Validation logic ───────────────────────────────────────────────────
 
 /// Validate Proxmox configuration by querying the host via SSH.
@@ -285,6 +324,114 @@ async fn ssh_command(host: &str, user: &str, cmd: &str) -> Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+// ── VM queries ─────────────────────────────────────────────────────────
+
+/// A VM entry from the Proxmox host, for display in pickers.
+#[derive(Debug, Clone)]
+pub struct ProxmoxVm {
+    pub vmid: u32,
+    pub name: String,
+}
+
+/// List all VMs on the Proxmox host.
+pub async fn list_vms(host: &str, user: &str, node: &str) -> Result<Vec<ProxmoxVm>> {
+    let cmd = format!("pvesh get /nodes/{node}/qemu --output-format json");
+    let output = ssh_command(host, user, &cmd).await?;
+    let vms: Vec<QemuVmInfo> = serde_json::from_str(&output)
+        .map_err(|e| eyre!("Failed to parse VM list: {e}"))?;
+    Ok(vms.iter().map(|v| ProxmoxVm { vmid: v.vmid, name: v.name.clone() }).collect())
+}
+
+/// Query a specific VM's config from Proxmox and convert to our VmConfig.
+pub async fn query_vm_config(
+    host: &str,
+    user: &str,
+    node: &str,
+    vmid: u32,
+) -> Result<crate::config::types::VmConfig> {
+    let cmd = format!("pvesh get /nodes/{node}/qemu/{vmid}/config --output-format json");
+    let output = ssh_command(host, user, &cmd).await?;
+    let config: QemuVmConfig = serde_json::from_str(&output)
+        .map_err(|e| eyre!("Failed to parse VM config: {e}"))?;
+
+    let memory_mb = config.memory
+        .as_deref()
+        .and_then(|m| m.parse::<u32>().ok())
+        .unwrap_or(49152);
+
+    // Parse disk size from spec like "local-lvm:vm-301-disk-0,size=256G"
+    let (disk_gb, disk_bus) = parse_disk_spec(&config);
+
+    // Parse network from spec like "e1000e=BC:24:11:F4:EF:51,bridge=vmbr0,firewall=1"
+    let (net_model, net_bridge) = parse_net_spec(&config);
+
+    Ok(crate::config::types::VmConfig {
+        vmid,
+        name: config.name.unwrap_or_else(|| format!("vm-{vmid}")),
+        cores: config.cores,
+        sockets: config.sockets,
+        memory_mb,
+        disk_gb,
+        disk_bus,
+        cpu_type: config.cpu.unwrap_or_else(|| "host".into()),
+        os_type: config.ostype.unwrap_or_else(|| "solaris".into()),
+        net_model,
+        net_bridge,
+    })
+}
+
+/// Parse disk size and bus type from Proxmox VM config.
+fn parse_disk_spec(config: &QemuVmConfig) -> (u32, String) {
+    let (spec, bus) = if let Some(ref s) = config.sata0 {
+        (s.as_str(), "sata")
+    } else if let Some(ref s) = config.scsi0 {
+        (s.as_str(), "scsi")
+    } else if let Some(ref s) = config.ide0 {
+        (s.as_str(), "ide")
+    } else {
+        return (256, "sata".into());
+    };
+
+    // Parse "size=256G" from spec like "local-lvm:vm-301-disk-0,size=256G"
+    let disk_gb = spec.split(',')
+        .find_map(|part| {
+            let part = part.trim();
+            if part.starts_with("size=") {
+                let val = part.trim_start_matches("size=").trim_end_matches('G');
+                val.parse::<u32>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(256);
+
+    (disk_gb, bus.into())
+}
+
+/// Parse network model and bridge from Proxmox VM config.
+fn parse_net_spec(config: &QemuVmConfig) -> (String, String) {
+    let Some(ref net) = config.net0 else {
+        return ("e1000e".into(), "vmbr0".into());
+    };
+
+    // Format: "e1000e=BC:24:11:F4:EF:51,bridge=vmbr0,firewall=1"
+    // Model is before the "="
+    let model = net.split('=').next().unwrap_or("e1000e").to_string();
+
+    let bridge = net.split(',')
+        .find_map(|part| {
+            let part = part.trim();
+            if part.starts_with("bridge=") {
+                Some(part.trim_start_matches("bridge=").to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "vmbr0".into());
+
+    (model, bridge)
 }
 
 // Re-export from the shared download module.

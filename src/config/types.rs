@@ -354,6 +354,24 @@ pub struct VmConfig {
     pub net_bridge: String,
 }
 
+impl Default for VmConfig {
+    fn default() -> Self {
+        Self {
+            vmid: 100,
+            name: String::new(),
+            cores: default_cores(),
+            sockets: default_sockets(),
+            memory_mb: default_memory_mb(),
+            disk_gb: default_disk_gb(),
+            disk_bus: default_disk_bus(),
+            cpu_type: default_cpu_type(),
+            os_type: default_os_type(),
+            net_model: default_net_model(),
+            net_bridge: default_net_bridge(),
+        }
+    }
+}
+
 // --- build.toml ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
