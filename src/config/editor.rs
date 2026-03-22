@@ -2,7 +2,7 @@ use std::fs;
 
 use color_eyre::{eyre::eyre, Result};
 
-use super::loader::{deployment_dir, deployments_dir, load_global_config, whoah_dir};
+use super::loader::{deployment_dir, deployments_dir, hypervisors_dir, load_global_config, whoah_dir};
 use super::types::*;
 
 pub fn create_deployment(name: &str, config: &DeploymentConfig) -> Result<()> {
@@ -210,6 +210,104 @@ pub fn migrate_deployment(old_name: &str, new_name: &str) -> Result<()> {
     Ok(())
 }
 
+// ── Hypervisor CRUD ────────────────────────────────────────────────────
+
+/// Update a single field in a shared hypervisor config, preserving formatting.
+/// `path` is a dotted key like "credentials.host" or "proxmox.node".
+pub fn update_hypervisor_field(name: &str, path: &str, value: &str) -> Result<()> {
+    let file_path = hypervisors_dir()?.join(format!("{name}.toml"));
+    let contents = fs::read_to_string(&file_path)
+        .map_err(|e| eyre!("Hypervisor '{name}' not found: {e}"))?;
+    let mut doc: toml_edit::DocumentMut = contents
+        .parse()
+        .map_err(|e| eyre!("Failed to parse {name}.toml: {e}"))?;
+
+    let parts: Vec<&str> = path.split('.').collect();
+    if parts.is_empty() {
+        return Err(eyre!("Empty field path"));
+    }
+
+    let (parent_parts, field_name) = parts.split_at(parts.len() - 1);
+    let field_name = field_name[0];
+
+    let mut table = doc.as_table_mut();
+    for &part in parent_parts {
+        table = table
+            .entry(part)
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| eyre!("Expected '{part}' to be a table"))?;
+    }
+
+    // Preserve integer type
+    let is_int = table
+        .get(field_name)
+        .map(|v| v.is_integer())
+        .unwrap_or(false);
+    if is_int {
+        let int_val: i64 = value
+            .parse()
+            .map_err(|_| eyre!("'{field_name}' must be a number, got '{value}'"))?;
+        table.insert(field_name, toml_edit::value(int_val));
+    } else {
+        table.insert(field_name, toml_edit::value(value));
+    }
+
+    // Validate before writing
+    let new_contents = doc.to_string();
+    toml::from_str::<HypervisorConfig>(&new_contents)
+        .map_err(|e| eyre!("Config validation failed after edit: {e}"))?;
+
+    fs::write(&file_path, new_contents)?;
+    Ok(())
+}
+
+/// Create a new hypervisor config with type-appropriate defaults.
+pub fn create_hypervisor(name: &str, htype: HypervisorType) -> Result<()> {
+    let dir = hypervisors_dir()?;
+    fs::create_dir_all(&dir)?;
+    let file_path = dir.join(format!("{name}.toml"));
+
+    if file_path.exists() {
+        return Err(eyre!("Hypervisor '{name}' already exists"));
+    }
+
+    let config = HypervisorConfig {
+        hypervisor: HypervisorMeta {
+            name: name.to_string(),
+            hypervisor_type: htype.clone(),
+        },
+        credentials: HypervisorCredentials {
+            host: String::new(),
+            ssh_user: "root".to_string(),
+        },
+        proxmox: match htype {
+            HypervisorType::Proxmox => Some(ProxmoxHypervisorConfig {
+                node: "PVE".to_string(),
+                iso_storage: "local".to_string(),
+                disk_storage: "local-lvm".to_string(),
+                iso_file: "helios-install-vga.iso".to_string(),
+            }),
+            HypervisorType::LinuxKvm => None,
+        },
+    };
+
+    let contents = toml::to_string_pretty(&config)?;
+    fs::write(&file_path, contents)?;
+    Ok(())
+}
+
+/// Delete a hypervisor config file.
+/// Caller must check for referencing deployments before calling.
+pub fn delete_hypervisor(name: &str) -> Result<()> {
+    let file_path = hypervisors_dir()?.join(format!("{name}.toml"));
+    if !file_path.exists() {
+        return Err(eyre!("Hypervisor '{name}' not found"));
+    }
+    fs::remove_file(&file_path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -311,5 +409,71 @@ instance_pool_range = { first = "192.168.2.51", last = "192.168.2.60" }
         assert!(result.contains(r#"gateway = "192.168.2.1""#));
         // instance_pool_range unchanged
         assert!(result.contains(r#"first = "192.168.2.51""#));
+    }
+
+    #[test]
+    fn test_update_hypervisor_field_string() {
+        let toml_str = r#"[hypervisor]
+name = "test-hyp"
+type = "proxmox"
+
+[credentials]
+host = "10.0.0.1"
+ssh_user = "root"
+
+[proxmox]
+node = "PVE"
+iso_storage = "local"
+disk_storage = "local-lvm"
+iso_file = "helios.iso"
+"#;
+        let mut doc: toml_edit::DocumentMut = toml_str.parse().unwrap();
+        let table = doc
+            .get_mut("credentials")
+            .unwrap()
+            .as_table_mut()
+            .unwrap();
+        table.insert("host", toml_edit::value("192.168.2.5"));
+
+        let result = doc.to_string();
+        assert!(result.contains(r#"host = "192.168.2.5""#));
+        assert!(result.contains(r#"ssh_user = "root""#)); // unchanged
+        assert!(result.contains(r#"node = "PVE""#)); // unchanged
+
+        // Validate roundtrip
+        let config: super::HypervisorConfig = toml::from_str(&result).unwrap();
+        assert_eq!(config.credentials.host, "192.168.2.5");
+    }
+
+    #[test]
+    fn test_create_hypervisor_proxmox_defaults() {
+        let config = super::HypervisorConfig {
+            hypervisor: super::HypervisorMeta {
+                name: "test".to_string(),
+                hypervisor_type: super::HypervisorType::Proxmox,
+            },
+            credentials: super::HypervisorCredentials {
+                host: String::new(),
+                ssh_user: "root".to_string(),
+            },
+            proxmox: Some(super::ProxmoxHypervisorConfig {
+                node: "PVE".to_string(),
+                iso_storage: "local".to_string(),
+                disk_storage: "local-lvm".to_string(),
+                iso_file: "helios-install-vga.iso".to_string(),
+            }),
+        };
+
+        let s = toml::to_string_pretty(&config).unwrap();
+        let parsed: super::HypervisorConfig = toml::from_str(&s).unwrap();
+        assert_eq!(parsed.hypervisor.name, "test");
+        assert_eq!(
+            parsed.hypervisor.hypervisor_type,
+            super::HypervisorType::Proxmox
+        );
+        assert!(parsed.credentials.host.is_empty());
+        assert_eq!(parsed.credentials.ssh_user, "root");
+        assert!(parsed.proxmox.is_some());
+        assert_eq!(parsed.proxmox.unwrap().node, "PVE");
     }
 }

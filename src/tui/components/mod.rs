@@ -1,8 +1,12 @@
 pub mod alert_bar;
 pub mod build_view;
+pub mod config_detail;
 pub mod config_view;
+pub mod deployment_panel;
 pub mod debug_view;
 pub mod git_ref_selector;
+pub mod hypervisor_panel;
+pub mod popup_picker;
 pub mod disk_panel;
 pub mod log_panel;
 pub mod recovery_view;

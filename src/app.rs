@@ -348,123 +348,51 @@ impl App {
     }
 
     fn handle_config_key(&mut self, key: KeyEvent) -> EventResult {
-        // Overlay: git ref picker / fetching — captures all input
-        if self.config_view.is_picking() {
-            if let Some(result) = self.config_view.handle_git_ref_key(key) {
-                match result {
-                    Ok(()) => tracing::info!("Config field updated"),
-                    Err(msg) => tracing::error!("{msg}"),
-                }
-            }
-            return EventResult::Consumed(None);
-        }
+        use crate::tui::components::config_view::ConfigViewEvent;
 
-        // Overlay: inline text editing — captures all input
-        if self.config_view.is_editing() {
-            match key.code {
-                KeyCode::Enter => {
-                    match self.config_view.confirm_edit() {
-                        Ok(()) => tracing::info!("Config field updated"),
-                        Err(msg) => tracing::error!("{msg}"),
-                    }
-                }
-                KeyCode::Esc => self.config_view.cancel_edit(),
-                _ => {
-                    self.config_view.handle_edit_event(
-                        &ratatui::crossterm::event::Event::Key(key),
-                    );
-                }
-            }
-            return EventResult::Consumed(None);
-        }
-
-        // Normal config navigation
-        match key.code {
-            KeyCode::Esc => {
-                if self.config_view.is_right_panel_focused() {
-                    self.config_view.toggle_focus();
-                    EventResult::Consumed(None)
-                } else {
+        match self.config_view.handle_key(key) {
+            ConfigViewEvent::Consumed => EventResult::Consumed(None),
+            ConfigViewEvent::Ignored => {
+                // ConfigView didn't handle it — check for screen-switch Esc
+                if key.code == KeyCode::Esc {
                     EventResult::Consumed(Some(Action::SwitchScreen(Screen::Monitor)))
-                }
-            }
-            KeyCode::Tab => {
-                self.config_view.toggle_focus();
-                EventResult::Consumed(None)
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.config_view.navigate_down();
-                EventResult::Consumed(None)
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.config_view.navigate_up();
-                EventResult::Consumed(None)
-            }
-            KeyCode::Enter => {
-                if self.config_view.is_left_panel_focused() {
-                    let build_running = self.pipeline.started.is_some()
-                        && !self.pipeline.is_complete();
-                    let recovery_running = self.recovery_view.is_active();
-                    let selected = self.config_view.selected_deployment_name()
-                        .map(|s| s.to_string());
-                    let already_active = selected.as_deref()
-                        == Some(self.deployment_name.as_str());
-
-                    if !already_active && (build_running || recovery_running) {
-                        tracing::warn!("Cannot switch deployment: operation in progress");
-                    } else if let Some((name, config)) =
-                        self.config_view.activate_selected()
-                    {
-                        let name = name.to_string();
-                        let config = config.clone();
-                        if name != self.deployment_name {
-                            self.deployment_name = name.clone();
-                            self.config = config;
-                            self.status_bar.set_deployment(&name);
-                            self.needs_reconnect = true;
-                            let thresholds = self.config.monitoring.thresholds.clone();
-                            let vdev_size = self.config.build.omicron.overrides
-                                .vdev_size_bytes.unwrap_or(42949672960);
-                            self.disk_panel = DiskPanel::new(thresholds, vdev_size);
-                            self.status_panel = StatusPanel::new();
-                            tracing::info!("Switched active deployment to {name}");
-                        }
-                    }
-                } else {
-                    self.config_view.start_edit();
-                    if let Some(kind) = self.config_view.pending_picker() {
-                        self.fetch_picker_data(kind);
-                    }
-                }
-                EventResult::Consumed(None)
-            }
-            KeyCode::Char('e') => {
-                if self.config_view.is_left_panel_focused() {
-                    self.config_view.toggle_focus();
-                }
-                EventResult::Consumed(None)
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if self.config_view.is_right_panel_focused() {
-                    if self.config_view.is_first_tab() {
-                        self.config_view.toggle_focus();
-                    } else {
-                        self.config_view.prev_tab();
-                    }
-                    EventResult::Consumed(None)
                 } else {
                     EventResult::Ignored
                 }
             }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if self.config_view.is_left_panel_focused() {
-                    self.config_view.toggle_focus();
-                } else {
-                    self.config_view.next_tab();
+            ConfigViewEvent::RequestActivation { name } => {
+                let build_running =
+                    self.pipeline.started.is_some() && !self.pipeline.is_complete();
+                let recovery_running = self.recovery_view.is_active();
+
+                if name != self.deployment_name && (build_running || recovery_running) {
+                    tracing::warn!("Cannot switch deployment: operation in progress");
+                } else if let Some((name, config)) = self.config_view.activate_selected() {
+                    let name = name.to_string();
+                    let config = config.clone();
+                    if name != self.deployment_name {
+                        self.deployment_name = name.clone();
+                        self.config = config;
+                        self.status_bar.set_deployment(&name);
+                        self.needs_reconnect = true;
+                        let thresholds = self.config.monitoring.thresholds.clone();
+                        let vdev_size = self.config.build.omicron.overrides
+                            .vdev_size_bytes.unwrap_or(42949672960);
+                        self.disk_panel = DiskPanel::new(thresholds, vdev_size);
+                        self.status_panel = StatusPanel::new();
+                        tracing::info!("Switched active deployment to {name}");
+                    }
                 }
                 EventResult::Consumed(None)
             }
-            _ => EventResult::Ignored,
+            ConfigViewEvent::FetchGitRefs { repo_url } => {
+                self.fetch_picker_data_for_url(&repo_url);
+                EventResult::Consumed(None)
+            }
+            ConfigViewEvent::HypervisorDeleted { name } => {
+                tracing::info!("Hypervisor '{name}' deleted");
+                EventResult::Consumed(None)
+            }
         }
     }
 
@@ -642,11 +570,13 @@ impl App {
                 match result {
                     Ok(refs) => {
                         self.git_ref_cache.insert(repo_url.clone(), refs.clone());
-                        self.config_view.open_git_ref_selector(&refs);
+                        self.config_view.deliver_data(
+                            crate::tui::components::config_detail::PanelData::GitRefs(refs.clone()),
+                        );
                     }
                     Err(msg) => {
                         tracing::error!("Failed to fetch refs: {msg}");
-                        self.config_view.cancel_edit();
+                        self.config_view.cancel_fetch();
                     }
                 }
             }
@@ -913,29 +843,26 @@ impl App {
         });
     }
 
-    fn fetch_picker_data(&mut self, kind: crate::tui::components::config_view::PickerKind) {
-        use crate::tui::components::config_view::PickerKind;
-        match kind {
-            PickerKind::GitRef { ref repo_url } => {
-                // Check session cache first
-                if let Some(cached) = self.git_ref_cache.get(repo_url) {
-                    self.config_view.open_git_ref_selector(&cached);
-                    return;
-                }
+    fn fetch_picker_data_for_url(&mut self, repo_url: &str) {
+        // Check session cache first
+        if let Some(cached) = self.git_ref_cache.get(repo_url) {
+            self.config_view.deliver_data(
+                crate::tui::components::config_detail::PanelData::GitRefs(cached.clone()),
+            );
+            return;
+        }
 
-                // Spawn async fetch
-                let repo_url = repo_url.clone();
-                if let Some(tx) = self.app_event_tx.clone() {
-                    let url = repo_url.clone();
-                    std::thread::spawn(move || {
-                        let result = crate::git::fetch_repo_refs(&url);
-                        let _ = tx.send(Event::App(AppEvent::GitRefsFetched {
-                            repo_url: url,
-                            result,
-                        }));
-                    });
-                }
-            }
+        // Spawn async fetch
+        let repo_url = repo_url.to_string();
+        if let Some(tx) = self.app_event_tx.clone() {
+            let url = repo_url.clone();
+            std::thread::spawn(move || {
+                let result = crate::git::fetch_repo_refs(&url);
+                let _ = tx.send(Event::App(AppEvent::GitRefsFetched {
+                    repo_url: url,
+                    result,
+                }));
+            });
         }
     }
 
@@ -1049,7 +976,7 @@ impl App {
         .split(frame.area());
 
         self.status_bar.render_tab_bar(frame, chrome[0], self.screen);
-        let config_editing = self.screen == Screen::Config && self.config_view.is_editing();
+        let config_editing = self.screen == Screen::Config && self.config_view.is_capturing();
         self.status_bar
             .render_keybindings(frame, chrome[2], self.screen, config_editing);
 

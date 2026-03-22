@@ -111,6 +111,25 @@ pub fn list_hypervisors() -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// Find all deployments whose [hypervisor] ref matches the given name.
+pub fn find_referencing_deployments(hypervisor_name: &str) -> Result<Vec<String>> {
+    let mut refs = Vec::new();
+    for name in list_deployments()? {
+        let dep_path = deployment_dir(&name)?.join("deployment.toml");
+        if let Ok(contents) = fs::read_to_string(&dep_path) {
+            if let Ok(dep) = toml::from_str::<DeploymentToml>(&contents) {
+                if let Some(href) = &dep.hypervisor {
+                    if href.hypervisor_ref == hypervisor_name {
+                        refs.push(name);
+                    }
+                }
+            }
+        }
+    }
+    refs.sort();
+    Ok(refs)
+}
+
 pub fn load_deployment_state(name: &str) -> Result<DeploymentState> {
     let path = deployment_dir(name)?.join("state.toml");
     if !path.exists() {
