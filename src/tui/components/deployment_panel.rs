@@ -6,13 +6,16 @@ use ratatui::widgets::{Paragraph, Tabs};
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
+use std::collections::HashMap;
+
 use super::config_detail::{
-    self, ConfigPanel, DetailLine, PickerKind, PanelAction, PanelData, PanelEvent,
+    self, ConfigPanel, DetailLine, DetailStyle, PickerKind, PanelAction, PanelData, PanelEvent,
     push_editable, push_field, push_header, push_pickable, render_detail_lines,
 };
 use super::git_ref_selector::{GitRefSelector, SelectorAction};
 use crate::config::editor::update_deployment_field;
 use crate::config::loader::{load_deployment, load_deployment_state, load_hypervisor};
+use crate::ssh::probe::SshProbeStatus;
 use crate::config::types::{DeploymentConfig, DeploymentState, HypervisorConfig};
 use crate::tui::theme::Palette;
 
@@ -65,6 +68,9 @@ pub struct DeploymentPanel {
     tab_nav: [(usize, usize); 5],
     edit_mode: EditMode,
     visible_height: Cell<usize>,
+
+    /// SSH probe status per host name.
+    ssh_status: HashMap<String, SshProbeStatus>,
 }
 
 impl DeploymentPanel {
@@ -84,6 +90,7 @@ impl DeploymentPanel {
             tab_nav: [(0, 0); 5],
             edit_mode: EditMode::Viewing,
             visible_height: Cell::new(0),
+            ssh_status: HashMap::new(),
         };
         panel.rebuild_detail_lines();
         panel
@@ -95,6 +102,26 @@ impl DeploymentPanel {
 
     pub fn config(&self) -> &DeploymentConfig {
         &self.config
+    }
+
+    /// Request SSH probes for all hosts with non-empty addresses.
+    /// Returns probe actions for the caller to dispatch.
+    pub fn request_probes(&mut self) -> Vec<PanelAction> {
+        let mut actions = Vec::new();
+        for (name, host) in &self.config.deployment.hosts {
+            if host.address.is_empty() {
+                continue;
+            }
+            self.ssh_status.insert(name.clone(), SshProbeStatus::Checking);
+            actions.push(PanelAction::ProbeSsh {
+                host: host.address.clone(),
+                user: host.ssh_user.clone(),
+            });
+        }
+        if !actions.is_empty() {
+            self.rebuild_detail_lines();
+        }
+        actions
     }
 
     // --- Tab/line indexing ---
@@ -209,13 +236,41 @@ impl DeploymentPanel {
         None
     }
 
-    fn confirm_edit(&mut self) -> Result<(), String> {
+    /// Confirm the edit, persist to disk, reload.
+    /// Returns Ok(Some(PanelAction)) if a re-probe should be triggered.
+    fn confirm_edit(&mut self) -> Result<Option<PanelAction>, String> {
         let EditMode::Editing { ref input } = self.edit_mode else {
-            return Ok(());
+            return Ok(None);
         };
         let new_value = input.value().to_string();
+        let field_path = self.detail_lines().get(self.selected_line())
+            .and_then(|l| l.field.as_ref())
+            .map(|f| f.path.clone());
         self.edit_mode = EditMode::Viewing;
-        self.persist_field(&new_value)
+        self.persist_field(&new_value)?;
+
+        // Re-probe if a host credential field was edited (e.g. "hosts.helios01.address")
+        if let Some(path) = field_path {
+            if path.starts_with("hosts.") && (path.ends_with(".address") || path.ends_with(".ssh_user")) {
+                // Extract host name from path like "hosts.helios01.address"
+                let parts: Vec<&str> = path.split('.').collect();
+                if parts.len() >= 2 {
+                    let host_name = parts[1];
+                    let probe_target = self.config.deployment.hosts.get(host_name)
+                        .filter(|h| !h.address.is_empty())
+                        .map(|h| (h.address.clone(), h.ssh_user.clone()));
+                    if let Some((address, ssh_user)) = probe_target {
+                        self.ssh_status.insert(host_name.to_string(), SshProbeStatus::Checking);
+                        self.rebuild_detail_lines();
+                        return Ok(Some(PanelAction::ProbeSsh {
+                            host: address,
+                            user: ssh_user,
+                        }));
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
     fn cancel_edit(&mut self) {
@@ -329,7 +384,34 @@ impl DeploymentPanel {
         }
 
         for (name, host) in &d.hosts {
-            push_header(&mut host_tab, name);
+            let status = self.ssh_status.get(name).copied().unwrap_or(SshProbeStatus::Unknown);
+            let (dot, color) = match status {
+                SshProbeStatus::Unknown => ("●", Palette::default().text_disabled),
+                SshProbeStatus::Checking => ("●", Palette::default().text_disabled),
+                SshProbeStatus::Valid => ("●", Palette::default().green_primary),
+                SshProbeStatus::AuthFailed => ("●", Palette::default().red_error),
+                SshProbeStatus::Offline => ("●", Palette::default().yellow_warn),
+            };
+            // Spacer line
+            host_tab.push(DetailLine {
+                text: String::new(),
+                style: DetailStyle::SectionHeader,
+                field: None,
+                raw_value: None,
+                picker: None,
+                action: None,
+                fg_override: None,
+            });
+            // Host header with connectivity dot
+            host_tab.push(DetailLine {
+                text: format!("  {name} {dot}"),
+                style: DetailStyle::SectionHeader,
+                field: None,
+                raw_value: None,
+                picker: None,
+                action: None,
+                fg_override: Some(color),
+            });
             push_editable(
                 &mut host_tab,
                 "address",
@@ -903,8 +985,10 @@ impl ConfigPanel for DeploymentPanel {
         if let EditMode::Editing { .. } = self.edit_mode {
             match key.code {
                 KeyCode::Enter => {
-                    if let Err(msg) = self.confirm_edit() {
-                        return PanelEvent::Action(PanelAction::Error(msg));
+                    match self.confirm_edit() {
+                        Err(msg) => return PanelEvent::Action(PanelAction::Error(msg)),
+                        Ok(Some(action)) => return PanelEvent::Action(action),
+                        Ok(None) => {}
                     }
                 }
                 KeyCode::Esc => self.cancel_edit(),
@@ -1027,7 +1111,16 @@ impl ConfigPanel for DeploymentPanel {
                 let selector = GitRefSelector::new(current, refs);
                 self.edit_mode = EditMode::GitRefSelect { selector };
             }
-            _ => {} // Ignore data types not relevant to this panel
+            PanelData::SshProbeResult(status) => {
+                // Match the probe result IP back to a host name
+                for (name, host) in &self.config.deployment.hosts {
+                    if self.ssh_status.get(name) == Some(&SshProbeStatus::Checking) {
+                        self.ssh_status.insert(name.clone(), status);
+                        break;
+                    }
+                }
+                self.rebuild_detail_lines();
+            }
         }
     }
 }

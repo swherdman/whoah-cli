@@ -374,15 +374,26 @@ impl ConfigView {
         }
     }
 
-    /// If the active panel is a HypervisorPanel with a non-empty host,
-    /// request an SSH credential probe.
+    /// Request SSH credential probes for the active panel.
+    /// Returns the first probe as a ConfigViewEvent; spawns remaining probes
+    /// via accumulated_probe_events (drained by handle_key callers).
     fn request_panel_probe(&mut self) -> Option<ConfigViewEvent> {
-        if let ActivePanel::Hypervisor(panel) = &mut self.active_panel {
-            if let Some(action) = panel.request_probe() {
-                if let PanelAction::ProbeSsh { host, user } = action {
+        match &mut self.active_panel {
+            ActivePanel::Hypervisor(panel) => {
+                if let Some(PanelAction::ProbeSsh { host, user }) = panel.request_probe() {
                     return Some(ConfigViewEvent::ProbeSsh { host, user });
                 }
             }
+            ActivePanel::Deployment(panel) => {
+                // TODO: Currently only dispatches the first probe. When deployments
+                // have multiple hosts, dispatch all probes (e.g. return a Vec or
+                // accumulate additional events for App to drain).
+                let actions = panel.request_probes();
+                if let Some(PanelAction::ProbeSsh { host, user }) = actions.into_iter().next() {
+                    return Some(ConfigViewEvent::ProbeSsh { host, user });
+                }
+            }
+            _ => {}
         }
         None
     }
