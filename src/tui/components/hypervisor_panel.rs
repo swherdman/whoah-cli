@@ -41,6 +41,15 @@ pub struct HypervisorPanel {
     ssh_status: SshProbeStatus,
     /// Proxmox config validation results (if type=proxmox).
     proxmox_validation: Option<ProxmoxValidation>,
+    /// ISO download state.
+    download_state: DownloadState,
+}
+
+#[derive(Clone)]
+enum DownloadState {
+    Idle,
+    Downloading { percent: f32 },
+    Failed(String),
 }
 
 impl HypervisorPanel {
@@ -60,6 +69,7 @@ impl HypervisorPanel {
             visible_height: Cell::new(0),
             ssh_status: SshProbeStatus::Unknown,
             proxmox_validation: None,
+            download_state: DownloadState::Idle,
         };
         panel.rebuild_lines();
         panel.selected = config_detail::first_editable_line(&panel.lines);
@@ -262,11 +272,10 @@ impl HypervisorPanel {
         }
     }
 
-    fn start_download(&self) -> PanelEvent {
-        let Some(ref validation) = self.proxmox_validation else {
-            return PanelEvent::Consumed;
-        };
-        let Some(ref storage_path) = validation.iso_storage_path else {
+    fn start_download(&mut self) -> PanelEvent {
+        let storage_path = self.proxmox_validation.as_ref()
+            .and_then(|v| v.iso_storage_path.clone());
+        let Some(storage_path) = storage_path else {
             return PanelEvent::Action(PanelAction::Error(
                 "Cannot download: iso_storage path unknown".into(),
             ));
@@ -274,11 +283,16 @@ impl HypervisorPanel {
         let Some(px) = &self.config.proxmox else {
             return PanelEvent::Consumed;
         };
+        let host = self.config.credentials.host.clone();
+        let user = self.config.credentials.ssh_user.clone();
+        let filename = px.iso_file.clone();
+        self.download_state = DownloadState::Downloading { percent: 0.0 };
+        self.rebuild_lines();
         PanelEvent::Action(PanelAction::DownloadIso {
-            host: self.config.credentials.host.clone(),
-            user: self.config.credentials.ssh_user.clone(),
-            iso_storage_path: storage_path.clone(),
-            filename: px.iso_file.clone(),
+            host,
+            user,
+            iso_storage_path: storage_path,
+            filename,
         })
     }
 
@@ -407,11 +421,21 @@ impl HypervisorPanel {
         // Type-specific section
         build_type_section(&mut lines, &self.config, self.proxmox_validation.as_ref());
 
-        // Download action — only shown when ISO file is missing
-        if let Some(ref validation) = self.proxmox_validation {
-            if matches!(validation.iso_file, FieldStatus::Invalid(_)) {
+        // Download action — shown when ISO is missing or download in progress/failed
+        {
+            let p = Palette::default();
+            let show_download = match &self.download_state {
+                DownloadState::Downloading { .. } | DownloadState::Failed(_) => true,
+                DownloadState::Idle => {
+                    self.proxmox_validation.as_ref()
+                        .map(|v| matches!(v.iso_file, FieldStatus::Invalid(_)))
+                        .unwrap_or(false)
+                }
+            };
+
+            if show_download {
                 if let Some(px) = &self.config.proxmox {
-                    let p = Palette::default();
+                    // Spacer
                     lines.push(DetailLine {
                         text: String::new(),
                         style: DetailStyle::SectionHeader,
@@ -422,14 +446,33 @@ impl HypervisorPanel {
                         fg_override: None,
                         suffix: None,
                     });
+
+                    let (text, color, action) = match &self.download_state {
+                        DownloadState::Idle => (
+                            format!("  Download {}", px.iso_file),
+                            p.green_primary,
+                            Some(LineAction::DownloadIso),
+                        ),
+                        DownloadState::Downloading { percent } => (
+                            format!("  Downloading... {percent:.1}%"),
+                            p.yellow_warn,
+                            None,
+                        ),
+                        DownloadState::Failed(msg) => (
+                            format!("  Download failed: {msg}"),
+                            p.red_error,
+                            Some(LineAction::DownloadIso), // Allow retry
+                        ),
+                    };
+
                     lines.push(DetailLine {
-                        text: format!("  Download {}", px.iso_file),
+                        text,
                         style: DetailStyle::EditableField,
                         field: None,
                         raw_value: None,
                         picker: None,
-                        action: Some(LineAction::DownloadIso),
-                        fg_override: Some(p.green_primary),
+                        action,
+                        fg_override: Some(color),
                         suffix: None,
                     });
                 }
@@ -690,7 +733,24 @@ impl ConfigPanel for HypervisorPanel {
                     let _ = update_hypervisor_field(&self.name, "proxmox.node", correct_node);
                     self.reload();
                 }
+                // If validation shows ISO is now valid, clear download state
+                if matches!(validation.iso_file, FieldStatus::Valid) {
+                    self.download_state = DownloadState::Idle;
+                }
                 self.proxmox_validation = Some(validation);
+                self.rebuild_lines();
+            }
+            PanelData::DownloadProgress { percent } => {
+                self.download_state = DownloadState::Downloading { percent };
+                self.rebuild_lines();
+            }
+            PanelData::DownloadComplete => {
+                self.download_state = DownloadState::Idle;
+                // Re-validation will be triggered by App
+                self.rebuild_lines();
+            }
+            PanelData::DownloadFailed(msg) => {
+                self.download_state = DownloadState::Failed(msg);
                 self.rebuild_lines();
             }
             _ => {}

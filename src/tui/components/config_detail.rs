@@ -62,6 +62,9 @@ pub enum PanelData {
     GitRefs(RepoRefs),
     SshProbeResult(crate::ssh::probe::SshProbeStatus),
     ProxmoxValidation(crate::ops::hypervisor_proxmox_validate::ProxmoxValidation),
+    DownloadProgress { percent: f32 },
+    DownloadComplete,
+    DownloadFailed(String),
 }
 
 // ── Detail line types ──────────────────────────────────────────────────

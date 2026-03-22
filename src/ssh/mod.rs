@@ -1,4 +1,5 @@
 pub mod direct;
+pub mod download;
 pub mod mock;
 pub mod probe;
 pub mod registry;

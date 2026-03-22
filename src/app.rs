@@ -602,17 +602,27 @@ impl App {
                     self.spawn_proxmox_validation(&host, &user);
                 }
             }
+            AppEvent::DownloadProgress { filename, percent } => {
+                self.config_view.deliver_data(
+                    crate::tui::components::config_detail::PanelData::DownloadProgress { percent: *percent },
+                );
+            }
             AppEvent::IsoDownloadResult { filename, result } => {
                 match result {
                     Ok(()) => {
                         tracing::info!("ISO download complete: {filename}");
-                        // Re-trigger Proxmox validation to update the iso_file dot
+                        self.config_view.deliver_data(
+                            crate::tui::components::config_detail::PanelData::DownloadComplete,
+                        );
                         if let Some((host, user)) = self.config_view.active_hypervisor_credentials() {
                             self.spawn_proxmox_validation(&host, &user);
                         }
                     }
                     Err(ref msg) => {
                         tracing::error!("ISO download failed: {msg}");
+                        self.config_view.deliver_data(
+                            crate::tui::components::config_detail::PanelData::DownloadFailed(msg.clone()),
+                        );
                     }
                 }
             }
@@ -946,7 +956,7 @@ impl App {
     }
 
     fn spawn_iso_download(&mut self, host: &str, user: &str, iso_storage_path: &str, filename: &str) {
-        let Some(tx) = self.app_event_tx.clone() else {
+        let Some(event_tx) = self.app_event_tx.clone() else {
             return;
         };
         let host = host.to_string();
@@ -955,12 +965,31 @@ impl App {
         let filename = filename.to_string();
         tracing::info!("Starting ISO download: {filename} to {host}:{path}");
         tokio::spawn(async move {
+            // Create a channel for progress updates
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<crate::ssh::download::DownloadProgress>(16);
+
+            // Forward progress events to the main event loop
+            let event_tx_progress = event_tx.clone();
+            let filename_progress = filename.clone();
+            let progress_forwarder = tokio::spawn(async move {
+                while let Some(progress) = progress_rx.recv().await {
+                    let _ = event_tx_progress.send(Event::App(AppEvent::DownloadProgress {
+                        filename: filename_progress.clone(),
+                        percent: progress.percent,
+                    }));
+                }
+            });
+
             let result = crate::ops::hypervisor_proxmox_validate::download_iso(
-                &host, &user, &path, &filename,
+                &host, &user, &path, &filename, progress_tx,
             )
             .await
             .map_err(|e| e.to_string());
-            let _ = tx.send(Event::App(AppEvent::IsoDownloadResult {
+
+            // Wait for progress forwarder to finish
+            let _ = progress_forwarder.await;
+
+            let _ = event_tx.send(Event::App(AppEvent::IsoDownloadResult {
                 filename,
                 result,
             }));

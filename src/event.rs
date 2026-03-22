@@ -47,6 +47,11 @@ pub enum AppEvent {
     },
     /// Proxmox config validation completed
     ProxmoxValidated(ProxmoxValidation),
+    /// ISO download progress update
+    DownloadProgress {
+        filename: String,
+        percent: f32,
+    },
     /// ISO download completed
     IsoDownloadResult {
         filename: String,

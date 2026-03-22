@@ -230,7 +230,13 @@ pub async fn validate_proxmox(
                             .iter()
                             .filter_map(|i| {
                                 // volid format: "local:iso/helios-install-vga.iso"
-                                i.volid.split('/').last().map(|s| s.to_string())
+                                let name = i.volid.split('/').last()?;
+                                // Only include Helios install ISOs
+                                if name.starts_with("helios-install-") && name.ends_with(".iso") {
+                                    Some(name.to_string())
+                                } else {
+                                    None
+                                }
                             })
                             .collect();
 
@@ -281,27 +287,22 @@ async fn ssh_command(host: &str, user: &str, cmd: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Download an ISO file to the Proxmox host's ISO storage via wget.
-/// Returns Ok on success, Err with a message on failure.
+// Re-export from the shared download module.
+pub use crate::ssh::download::DownloadProgress;
+
+/// Download an ISO file to the Proxmox host's ISO storage.
+/// Uses the shared `ssh::download::download_remote` function.
 pub async fn download_iso(
     host: &str,
     user: &str,
     iso_storage_path: &str,
     filename: &str,
+    progress_tx: tokio::sync::mpsc::Sender<DownloadProgress>,
 ) -> Result<()> {
     let url = format!("https://pkg.oxide.computer/install/latest/{filename}");
     let dest = format!("{iso_storage_path}/template/iso/{filename}");
 
-    // Check if wget is available
-    ssh_command(host, user, "which wget")
-        .await
-        .map_err(|_| eyre!("wget not found on Proxmox host"))?;
-
-    // Download with wget — quiet mode, show progress via stderr
-    let cmd = format!("wget -q -O '{dest}' '{url}'");
-    ssh_command(host, user, &cmd).await?;
-
-    Ok(())
+    crate::ssh::download::download_remote(host, user, &url, &dest, progress_tx).await
 }
 
 #[cfg(test)]
