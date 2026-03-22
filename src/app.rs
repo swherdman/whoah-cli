@@ -12,6 +12,7 @@ use crate::event::{AppEvent, Event, Severity};
 use crate::git::RefCache;
 use crate::ops::pipeline::{self, Pipeline};
 use crate::parse::cargo_progress::{self, CargoTracker};
+use crate::parse::omicron_pkg_log::{self, OmicronPkgTracker};
 use crate::parse::pkg_progress;
 use crate::parse::xtask_download::{self, XtaskTracker};
 use crate::ops::recover::{run_recovery, RecoveryEvent, RecoveryParams};
@@ -76,6 +77,7 @@ pub struct App {
     // Build step parser state
     cargo_tracker: CargoTracker,
     xtask_tracker: XtaskTracker,
+    omicron_pkg_tracker: OmicronPkgTracker,
 
     // Git ref cache for ref selectors (session-scoped, keyed by repo URL)
     git_ref_cache: RefCache,
@@ -112,6 +114,7 @@ impl App {
             app_event_tx: None,
             cargo_tracker: CargoTracker::default(),
             xtask_tracker: XtaskTracker::default(),
+            omicron_pkg_tracker: OmicronPkgTracker::default(),
             git_ref_cache: RefCache::new(),
             demo,
         }
@@ -662,8 +665,12 @@ impl App {
 
                 // Reset parser trackers for steps that use them
                 match id.as_str() {
-                    "build-compile" | "build-package" => {
+                    "build-compile" => {
                         self.cargo_tracker = CargoTracker::default();
+                    }
+                    "build-package" => {
+                        self.cargo_tracker = CargoTracker::default();
+                        self.omicron_pkg_tracker = OmicronPkgTracker::default();
                     }
                     "build-prereqs-builder" | "build-prereqs-runner" => {
                         self.xtask_tracker = XtaskTracker::default();
@@ -690,15 +697,14 @@ impl App {
                     }
                     "build-package" => {
                         // build-package gets two streams: cargo Compiling lines
-                        // from the main SSH command, and parsed LOG tail events
-                        // (Verifying/Downloading) from the background task.
-                        // LOG tail events arrive pre-formatted, cargo lines need parsing.
+                        // from the main SSH command, and omicron-package LOG
+                        // events (Verifying/Downloading) from the background tail.
                         if let Some(event) = cargo_progress::parse_cargo_line(detail) {
                             self.cargo_tracker.update(&event);
                             Some(self.cargo_tracker.summary())
-                        } else if detail.starts_with("Verifying:") || detail.starts_with("Downloading:") {
-                            // Pre-formatted from LOG tail — use as-is
-                            Some(detail.clone())
+                        } else if let Some(event) = omicron_pkg_log::parse_omicron_pkg_line(detail) {
+                            self.omicron_pkg_tracker.update(&event);
+                            Some(self.omicron_pkg_tracker.summary())
                         } else {
                             None
                         }

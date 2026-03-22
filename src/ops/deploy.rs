@@ -1255,21 +1255,11 @@ print('Updated vdevs to {vdev_count}')
         });
 
         while let Some(line) = line_rx.recv().await {
-            if let Some(event) = crate::parse::omicron_pkg_log::parse_omicron_pkg_line(&line) {
-                let summary = match &event {
-                    crate::parse::omicron_pkg_log::OmicronPkgEvent::Verifying { package } => {
-                        format!("Verifying: {package}")
-                    }
-                    crate::parse::omicron_pkg_log::OmicronPkgEvent::Downloading { package } => {
-                        format!("Downloading: {package}")
-                    }
-                    crate::parse::omicron_pkg_log::OmicronPkgEvent::Other { package, msg } => {
-                        format!("{package}: {msg}")
-                    }
-                };
+            if crate::parse::omicron_pkg_log::parse_omicron_pkg_line(&line).is_some() {
+                // Send raw JSON line — app.rs parses and tracks via OmicronPkgTracker
                 let _ = log_tail_tx.send(BuildEvent::StepDetail(
                     "build-package".into(),
-                    summary,
+                    line,
                 ));
             }
         }

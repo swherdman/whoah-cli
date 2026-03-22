@@ -52,7 +52,7 @@ impl P {
 }
 
 const FILLED: &str = "\u{258A}"; // ▊  — progress bars
-const EMPTY: &str = "\u{2395}";  // ⎕  — progress bars (kept for bar rendering)
+const EMPTY: &str = "\u{2395}";  // ⎕  — progress bars
 const GRID_ON: &str = "\u{25A0}";  // ■  — zone distribution: present (single)
 const GRID_OFF: &str = "\u{25A1}"; // □  — zone distribution: not present
 

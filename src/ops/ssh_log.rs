@@ -19,7 +19,7 @@ pub struct LoggedSsh<'a> {
     log_path: PathBuf,
     tx: mpsc::UnboundedSender<BuildEvent>,
     step_id: String,
-    /// Proxy env string, set via `set_proxy()`. Prepended by `run_with_proxy()`.
+    /// Proxy env string, set via `set_proxy()`. Prepended by proxy methods.
     proxy_env: Option<String>,
 }
 
@@ -65,7 +65,7 @@ impl<'a> LoggedSsh<'a> {
         self.step_id = step_id.to_string();
     }
 
-    /// Set proxy environment variables for use with `run_with_proxy()`.
+    /// Set proxy environment variables for use with proxy methods.
     pub fn set_proxy(&mut self, proxy_url: &str, ca_cert_path: &str) {
         self.proxy_env = Some(format!(
             "https_proxy={proxy_url} HTTPS_PROXY={proxy_url} \

@@ -60,22 +60,6 @@ pub async fn ensure_caches() -> Result<CacheInfo> {
     })
 }
 
-/// Legacy alias for code that only needs the pkg publisher URL.
-pub async fn ensure_pkg_cache() -> Result<PkgCacheInfo> {
-    let info = ensure_caches().await?;
-    Ok(PkgCacheInfo {
-        publisher_url: info.publisher_url,
-        lan_ip: info.lan_ip,
-        was_running: info.nginx_was_running,
-    })
-}
-
-/// Legacy struct for backward compat.
-pub struct PkgCacheInfo {
-    pub publisher_url: String,
-    pub lan_ip: String,
-    pub was_running: bool,
-}
 
 /// Verify the pkg cache is reachable from a Helios host.
 pub async fn verify_pkg_cache(
