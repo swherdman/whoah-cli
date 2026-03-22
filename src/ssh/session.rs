@@ -113,16 +113,6 @@ impl SshHost {
         std::fs::read_to_string(&self.log_path).ok()
     }
 
-    /// Get the control socket path.
-    pub fn ctl_path(&self) -> &PathBuf {
-        &self.ctl_path
-    }
-
-    /// Get the session ID.
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
     /// Pre-command health check. Returns an error if the mux master is dead.
     fn check_health(&self, cmd: &str) -> Result<()> {
         if !self.socket_exists() {

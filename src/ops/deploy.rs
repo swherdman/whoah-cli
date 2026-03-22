@@ -737,7 +737,7 @@ async fn run_os_setup(
 
         ssh.detail("Running pkg update...").await;
         // pkg update: exit 0 = updated (reboot needed), exit 4 = nothing to do
-        let exit_code = ssh.run_streaming("pfexec pkg update -v 2>&1; echo \"PKG_EXIT=$?\"").await?;
+        let _exit_code = ssh.run_streaming("pfexec pkg update -v 2>&1; echo \"PKG_EXIT=$?\"").await?;
 
         // Parse the real exit code from our echo (ssh exit code may differ)
         // For simplicity, check if the output indicated no updates
@@ -1448,8 +1448,8 @@ print('Updated vdevs to {vdev_count}')
 
     let mut dns_ok = false;
     let mut api_ok = false;
-    let mut dns_checked = false;
-    let mut api_checked = false;
+    let dns_checked = false;
+    let api_checked = false;
 
     // Integrated polling loop: poll zone status and trigger DNS/API checks
     // as soon as the relevant zones come up

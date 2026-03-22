@@ -12,7 +12,6 @@ use crate::event::{AppEvent, Event, Severity};
 use crate::git::RefCache;
 use crate::ops::pipeline::{self, Pipeline};
 use crate::parse::cargo_progress::{self, CargoTracker};
-use crate::parse::omicron_pkg_log;
 use crate::parse::pkg_progress;
 use crate::parse::xtask_download::{self, XtaskTracker};
 use crate::ops::recover::{run_recovery, RecoveryEvent, RecoveryParams};
@@ -613,7 +612,6 @@ impl App {
                     self.last_status_log = Some(status_summary);
                 }
             }
-            _ => {}
         }
     }
 

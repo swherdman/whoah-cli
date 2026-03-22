@@ -130,7 +130,7 @@ fn read_log_tail(path: &PathBuf, lines: usize) -> Option<String> {
     if tail.is_empty() {
         None
     } else {
-        let mut result: Vec<&str> = tail.into_iter().rev().collect();
+        let result: Vec<&str> = tail.into_iter().rev().collect();
         Some(result.join("\n"))
     }
 }

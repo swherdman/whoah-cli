@@ -107,51 +107,7 @@ impl Palette {
         }
     }
 
-    /// Deprecated: Website palette — hex values from oxide.computer homepage and SVGs.
-    /// Warmer greens (R>0), darker text grays. Kept for future reference; the
-    /// homepage JS bundle and SVG mockups use these values, which diverge from
-    /// the design system OKLCH definitions. See OXIDE-VISUAL-STYLE.md.
-    #[deprecated(note = "use Palette::design_system() — website colors diverge from the canonical design system")]
-    pub const fn website() -> Self {
-        Self {
-            bg_base: Color::Rgb(8, 15, 17),           // #080F11
-            bg_panel: Color::Rgb(16, 22, 24),          // #101618
-            bg_card: Color::Rgb(20, 27, 29),           // #141B1D
-            bg_hover: Color::Rgb(28, 34, 37),          // #1C2225
-
-            border_default: Color::Rgb(45, 51, 53),    // #2D3335
-            border_focus: Color::Rgb(64, 70, 71),      // #404647
-            border_input: Color::Rgb(41, 47, 49),      // #292F31
-
-            text_disabled: Color::Rgb(91, 95, 97),     // #5B5F61
-            text_tertiary: Color::Rgb(126, 131, 133),  // #7E8385
-            text_secondary: Color::Rgb(152, 154, 155), // #989A9B
-            text_default: Color::Rgb(161, 164, 165),   // #A1A4A5
-            text_raised: Color::Rgb(184, 187, 188),    // #B8BBBC
-            text_bright: Color::Rgb(231, 231, 232),    // #E7E7E8
-
-            green_primary: Color::Rgb(72, 213, 151),   // #48D597
-            green_secondary: Color::Rgb(32, 163, 108), // #20A36C
-            green_border: Color::Rgb(35, 106, 76),     // #236A4C
-            green_accent_border: Color::Rgb(32, 77, 59),// #204D3B
-            green_border_dark: Color::Rgb(28, 55, 46), // #1C372E
-            green_bg: Color::Rgb(22, 35, 34),          // #162322
-            green_bg_active: Color::Rgb(16, 36, 34),   // #102422
-
-            yellow_warn: Color::Rgb(202, 153, 59),     // #CA993B
-            red_error: Color::Rgb(232, 104, 134),      // #E86886
-            blue_info: Color::Rgb(103, 118, 187),      // #6776BB
-
-            ascii_active: Color::Rgb(72, 213, 151),    // #48D597
-            ascii_structural: Color::Rgb(35, 106, 76), // #236A4C
-        }
-    }
 }
-
-// ── Bar Characters ──────────────────────────────────────────────
-
-pub const FILLED: char = '\u{258A}'; // ▊
-pub const EMPTY: char = '\u{2395}';  // ⎕
 
 // ── Helper Functions ────────────────────────────────────────────
 

@@ -310,7 +310,6 @@ impl BuildView {
                     .fg(p.red_error)
                     .add_modifier(Modifier::BOLD),
             ),
-            StepStatus::Skipped => ("–", Style::default().fg(p.text_disabled)),
         };
 
         let icon_color = match &step.status {
@@ -318,7 +317,6 @@ impl BuildView {
             StepStatus::Running { .. } => p.yellow_warn,
             StepStatus::Completed { .. } => p.green_primary,
             StepStatus::Failed { .. } => p.red_error,
-            StepStatus::Skipped => p.text_disabled,
         };
 
         let time_str = match step.elapsed() {

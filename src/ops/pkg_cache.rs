@@ -10,7 +10,6 @@
 //! Both persist cached data in Docker named volumes across VM rebuilds.
 
 use color_eyre::{eyre::eyre, Result};
-use std::path::PathBuf;
 
 const NGINX_CONTAINER: &str = "whoah-pkg-cache";
 const NGINX_PORT: u16 = 8888;

@@ -204,11 +204,6 @@ impl ConfigView {
         }
     }
 
-    pub fn refresh_lists(&mut self) {
-        self.deployments = list_deployments().unwrap_or_default();
-        self.hypervisors = list_hypervisors().unwrap_or_default();
-    }
-
     /// Index of the active tab in the fixed-size arrays.
     fn tab_idx(&self) -> usize {
         self.active_tab as usize

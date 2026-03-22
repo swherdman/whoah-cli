@@ -118,24 +118,6 @@ impl<'a> LoggedSsh<'a> {
         Ok(output)
     }
 
-    /// Execute a command with proxy env vars prepended.
-    pub async fn run_with_proxy(&mut self, cmd: &str) -> Result<crate::ssh::CommandOutput> {
-        let full_cmd = format!("{}{cmd}", self.proxy_prefix());
-        self.run(&full_cmd).await
-    }
-
-    /// Execute a command with proxy env vars, check for success.
-    pub async fn run_check_with_proxy(&mut self, cmd: &str) -> Result<crate::ssh::CommandOutput> {
-        let full_cmd = format!("{}{cmd}", self.proxy_prefix());
-        self.run_check(&full_cmd).await
-    }
-
-    /// Execute a streaming command with proxy env vars.
-    pub async fn run_streaming_with_proxy(&mut self, cmd: &str) -> Result<i32> {
-        let full_cmd = format!("{}{cmd}", self.proxy_prefix());
-        self.run_streaming(&full_cmd).await
-    }
-
     /// Execute a streaming command with proxy env vars, check for success.
     pub async fn run_streaming_check_with_proxy(&mut self, cmd: &str) -> Result<()> {
         let full_cmd = format!("{}{cmd}", self.proxy_prefix());

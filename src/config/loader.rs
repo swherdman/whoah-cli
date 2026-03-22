@@ -120,13 +120,6 @@ pub fn load_deployment_state(name: &str) -> Result<DeploymentState> {
     Ok(toml::from_str(&contents)?)
 }
 
-pub fn save_deployment_state(name: &str, state: &DeploymentState) -> Result<()> {
-    let path = deployment_dir(name)?.join("state.toml");
-    let contents = toml::to_string_pretty(state)?;
-    fs::write(&path, contents)?;
-    Ok(())
-}
-
 /// Resolve hypervisor ref into a ProxmoxConfig for the deploy pipeline.
 pub fn resolve_proxmox_config(deployment: &DeploymentToml) -> Result<Option<ProxmoxConfig>> {
     let Some(href) = &deployment.hypervisor else {

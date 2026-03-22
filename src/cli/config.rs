@@ -25,7 +25,7 @@ pub async fn show(deployment: Option<&str>) -> Result<()> {
     println!("--- derived ---");
     println!("Expected zones ({total} total):");
     let mut services: Vec<_> = expected.iter().collect();
-    services.sort_by_key(|(k, _)| k.clone());
+    services.sort_by_key(|(k, _)| (*k).clone());
     for (svc, count) in services {
         println!("  {svc:<18} {count}");
     }

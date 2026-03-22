@@ -337,7 +337,7 @@ pub fn format_status(status: &HostStatus, deployment_name: &str) -> String {
     // Zone placement
     if !status.zones.placement.is_empty() {
         let mut pools: Vec<_> = status.zones.placement.iter().collect();
-        pools.sort_by_key(|(k, _)| k.clone());
+        pools.sort_by_key(|(k, _)| (*k).clone());
         for (pool, zone_names) in pools {
             // Shorten pool name for display
             let short_pool = pool

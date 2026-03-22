@@ -23,14 +23,13 @@ pub enum StepStatus {
         duration: Duration,
         error: String,
     },
-    Skipped,
 }
 
 impl StepStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            StepStatus::Completed { .. } | StepStatus::Failed { .. } | StepStatus::Skipped
+            StepStatus::Completed { .. } | StepStatus::Failed { .. }
         )
     }
 }
@@ -169,20 +168,6 @@ impl Pipeline {
         }
     }
 
-    /// Update the detail text of a running step and push to the output buffer.
-    pub fn update_step_detail(&mut self, id: &str, detail: String) {
-        if let Some(step) = self.step_mut(id) {
-            // Push to output buffer (for log panel)
-            step.push_output(detail.clone());
-            if let StepStatus::Running { started, .. } = step.status {
-                step.status = StepStatus::Running {
-                    started,
-                    detail: Some(detail),
-                };
-            }
-        }
-    }
-
     /// Mark a step as completed.
     pub fn complete_step(&mut self, id: &str) {
         if let Some(step) = self.step_mut(id) {
@@ -202,13 +187,6 @@ impl Pipeline {
                 _ => Duration::ZERO,
             };
             step.status = StepStatus::Failed { duration, error };
-        }
-    }
-
-    /// Mark a step as skipped.
-    pub fn skip_step(&mut self, id: &str) {
-        if let Some(step) = self.step_mut(id) {
-            step.status = StepStatus::Skipped;
         }
     }
 
@@ -345,13 +323,6 @@ mod tests {
             StepStatus::Running { .. }
         ));
 
-        // Update detail
-        p.update_step_detail("prov-create", "Creating VM 302...".to_string());
-        assert_eq!(
-            p.step_mut("prov-create").unwrap().detail(),
-            Some("Creating VM 302...")
-        );
-
         // Complete it
         p.complete_step("prov-create");
         assert!(matches!(
@@ -389,12 +360,4 @@ mod tests {
         assert_eq!(p.find_step("nonexistent"), None);
     }
 
-    #[test]
-    fn test_skip_step() {
-        let mut p = build_deploy_pipeline();
-        p.skip_step("os-swap");
-
-        let (done, _) = p.progress();
-        assert_eq!(done, 1); // skipped counts as terminal
-    }
 }

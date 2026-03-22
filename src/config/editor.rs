@@ -2,7 +2,7 @@ use std::fs;
 
 use color_eyre::{eyre::eyre, Result};
 
-use super::loader::{deployment_dir, deployments_dir, hypervisors_dir, load_global_config, whoah_dir};
+use super::loader::{deployment_dir, deployments_dir, load_global_config, whoah_dir};
 use super::types::*;
 
 pub fn create_deployment(name: &str, config: &DeploymentConfig) -> Result<()> {
@@ -27,14 +27,6 @@ pub fn write_global_config(config: &GlobalConfig) -> Result<()> {
     fs::create_dir_all(&dir)?;
     let contents = toml::to_string_pretty(config)?;
     fs::write(dir.join("config.toml"), contents)?;
-    Ok(())
-}
-
-pub fn save_hypervisor(config: &HypervisorConfig) -> Result<()> {
-    let dir = hypervisors_dir()?;
-    fs::create_dir_all(&dir)?;
-    let contents = toml::to_string_pretty(config)?;
-    fs::write(dir.join(format!("{}.toml", config.hypervisor.name)), contents)?;
     Ok(())
 }
 
@@ -74,12 +66,12 @@ pub fn update_deployment_field(
         let mut depth = 0usize;
         let mut t = doc.as_table();
         for &part in parent_parts {
-            match t.get(part) {
-                Some(item) if item.is_table() => {
-                    t = item.as_table().unwrap();
+            match t.get(part).and_then(|item| item.as_table()) {
+                Some(table) => {
+                    t = table;
                     depth += 1;
                 }
-                _ => break,
+                None => break,
             }
         }
         depth
@@ -93,7 +85,7 @@ pub fn update_deployment_field(
                 .entry(part)
                 .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
                 .as_table_mut()
-                .unwrap();
+                .ok_or_else(|| eyre!("Expected '{part}' to be a table"))?;
         }
 
         // Preserve integer type — reject non-numeric input for integer fields
@@ -103,11 +95,9 @@ pub fn update_deployment_field(
                 .parse()
                 .map_err(|_| eyre!("'{field_name}' must be a number, got '{value}'"))?;
             table.insert(field_name, toml_edit::value(int_val));
-            fs::write(&file_path, doc.to_string())?;
-            return Ok(());
+        } else {
+            table.insert(field_name, toml_edit::value(value));
         }
-
-        table.insert(field_name, toml_edit::value(value));
     } else {
         // We hit an inline table at `table_depth`.
         // Navigate regular tables up to the inline table's parent,
@@ -118,7 +108,11 @@ pub fn update_deployment_field(
 
         let mut table = doc.as_table_mut();
         for &part in regular_parts {
-            table = table.get_mut(part).unwrap().as_table_mut().unwrap();
+            table = table
+                .get_mut(part)
+                .ok_or_else(|| eyre!("Key '{part}' not found"))?
+                .as_table_mut()
+                .ok_or_else(|| eyre!("'{part}' is not a table"))?;
         }
 
         // Get the inline table item
@@ -149,14 +143,29 @@ pub fn update_deployment_field(
                 .parse()
                 .map_err(|_| eyre!("'{field_name}' must be a number, got '{value}'"))?;
             it.insert(field_name, toml_edit::Value::from(int_val));
-            fs::write(&file_path, doc.to_string())?;
-            return Ok(());
+        } else {
+            it.insert(field_name, toml_edit::Value::from(value));
         }
-
-        it.insert(field_name, toml_edit::Value::from(value));
     }
 
-    fs::write(&file_path, doc.to_string())?;
+    // Validate the modified TOML still deserializes into the expected config type
+    // before writing to disk. This catches semantically invalid edits early.
+    let new_contents = doc.to_string();
+    validate_config_contents(file, &new_contents)
+        .map_err(|e| eyre!("Config validation failed after edit: {e}"))?;
+
+    fs::write(&file_path, new_contents)?;
+    Ok(())
+}
+
+/// Validate that TOML content deserializes into the expected config type.
+fn validate_config_contents(file: &str, contents: &str) -> Result<()> {
+    match file {
+        "deployment" => { toml::from_str::<DeploymentToml>(contents)?; }
+        "build" => { toml::from_str::<BuildToml>(contents)?; }
+        "monitoring" => { toml::from_str::<MonitoringToml>(contents)?; }
+        _ => {}
+    }
     Ok(())
 }
 
