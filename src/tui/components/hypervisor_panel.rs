@@ -13,7 +13,8 @@ use super::config_detail::{
 use super::popup_picker::{PopupAction, PopupPicker};
 use crate::config::editor::{delete_hypervisor, update_hypervisor_field};
 use crate::config::loader::load_hypervisor;
-use crate::config::types::{HypervisorConfig, HypervisorType};
+use crate::config::types::{HypervisorConfig, HypervisorType, ProxmoxHypervisorConfig};
+use crate::ops::hypervisor_proxmox_validate::{FieldStatus, ProxmoxValidation};
 use crate::ssh::probe::SshProbeStatus;
 use crate::tui::theme::Palette;
 
@@ -37,6 +38,8 @@ pub struct HypervisorPanel {
 
     /// SSH credential probe status.
     ssh_status: SshProbeStatus,
+    /// Proxmox config validation results (if type=proxmox).
+    proxmox_validation: Option<ProxmoxValidation>,
 }
 
 impl HypervisorPanel {
@@ -55,6 +58,7 @@ impl HypervisorPanel {
             edit_mode: EditMode::Viewing,
             visible_height: Cell::new(0),
             ssh_status: SshProbeStatus::Unknown,
+            proxmox_validation: None,
         };
         panel.rebuild_lines();
         panel.selected = config_detail::first_editable_line(&panel.lines);
@@ -63,6 +67,23 @@ impl HypervisorPanel {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn proxmox_config(&self) -> Option<ProxmoxHypervisorConfig> {
+        self.config.proxmox.clone()
+    }
+
+    pub fn credentials_host(&self) -> &str {
+        &self.config.credentials.host
+    }
+
+    pub fn credentials_user(&self) -> &str {
+        &self.config.credentials.ssh_user
+    }
+
+    pub fn set_proxmox_checking(&mut self) {
+        self.proxmox_validation = Some(ProxmoxValidation::checking());
+        self.rebuild_lines();
     }
 
     /// Request an SSH credential probe if the host is non-empty.
@@ -276,6 +297,7 @@ impl HypervisorPanel {
                 picker: None,
                 action: None,
                 fg_override: None,
+                suffix: None,
             });
             // Header with colored dot
             lines.push(DetailLine {
@@ -286,6 +308,7 @@ impl HypervisorPanel {
                 picker: None,
                 action: None,
                 fg_override: Some(color),
+                suffix: None,
             });
         }
         push_editable(
@@ -304,7 +327,7 @@ impl HypervisorPanel {
         );
 
         // Type-specific section
-        build_type_section(&mut lines, &self.config);
+        build_type_section(&mut lines, &self.config, self.proxmox_validation.as_ref());
 
         // Delete action
         if self.referencing_deployments.is_empty() {
@@ -324,6 +347,7 @@ impl HypervisorPanel {
                 picker: None,
                 action: None,
                 fg_override: None,
+                suffix: None,
             });
             lines.push(DetailLine {
                 text: format!("  Delete hypervisor (referenced by {refs})"),
@@ -333,6 +357,7 @@ impl HypervisorPanel {
                 picker: None,
                 action: None,
                 fg_override: None,
+                suffix: None,
             });
 
             push_header(&mut lines, "REFERENCED BY");
@@ -346,9 +371,13 @@ impl HypervisorPanel {
 }
 
 /// Dispatch type-specific sections.
-fn build_type_section(lines: &mut Vec<DetailLine>, config: &HypervisorConfig) {
+fn build_type_section(
+    lines: &mut Vec<DetailLine>,
+    config: &HypervisorConfig,
+    validation: Option<&ProxmoxValidation>,
+) {
     match config.hypervisor.hypervisor_type {
-        HypervisorType::Proxmox => build_proxmox_section(lines, config),
+        HypervisorType::Proxmox => build_proxmox_section(lines, config, validation),
         HypervisorType::LinuxKvm => {
             push_header(lines, "LINUX KVM");
             push_field(lines, "status", "(not yet supported)");
@@ -356,34 +385,56 @@ fn build_type_section(lines: &mut Vec<DetailLine>, config: &HypervisorConfig) {
     }
 }
 
-fn build_proxmox_section(lines: &mut Vec<DetailLine>, config: &HypervisorConfig) {
+fn build_proxmox_section(
+    lines: &mut Vec<DetailLine>,
+    config: &HypervisorConfig,
+    validation: Option<&ProxmoxValidation>,
+) {
     push_header(lines, "PROXMOX");
     if let Some(px) = &config.proxmox {
-        push_editable(lines, "node", &px.node, "hypervisor", "proxmox.node");
-        push_editable(
-            lines,
-            "iso_storage",
-            &px.iso_storage,
-            "hypervisor",
-            "proxmox.iso_storage",
-        );
-        push_editable(
-            lines,
-            "disk_storage",
-            &px.disk_storage,
-            "hypervisor",
-            "proxmox.disk_storage",
-        );
-        push_editable(
-            lines,
-            "iso_file",
-            &px.iso_file,
-            "hypervisor",
-            "proxmox.iso_file",
-        );
+        push_validated_field(lines, "node", &px.node, "hypervisor", "proxmox.node",
+            validation.map(|v| &v.node));
+        push_validated_field(lines, "disk_storage", &px.disk_storage, "hypervisor", "proxmox.disk_storage",
+            validation.map(|v| &v.disk_storage));
+        push_validated_field(lines, "iso_storage", &px.iso_storage, "hypervisor", "proxmox.iso_storage",
+            validation.map(|v| &v.iso_storage));
+        push_validated_field(lines, "iso_file", &px.iso_file, "hypervisor", "proxmox.iso_file",
+            validation.map(|v| &v.iso_file));
     } else {
         push_field(lines, "error", "Missing [proxmox] section");
     }
+}
+
+/// Push an editable field with an optional validation status suffix dot.
+fn push_validated_field(
+    lines: &mut Vec<DetailLine>,
+    label: &str,
+    value: &str,
+    file: &'static str,
+    path: &str,
+    status: Option<&FieldStatus>,
+) {
+    let p = Palette::default();
+    let suffix = status.map(|s| match s {
+        FieldStatus::Unknown => ("●".to_string(), p.text_disabled),
+        FieldStatus::Checking => ("●".to_string(), p.text_disabled),
+        FieldStatus::Valid => ("●".to_string(), p.green_primary),
+        FieldStatus::Invalid(reason) => ("●".to_string(), p.red_error),
+    });
+
+    lines.push(DetailLine {
+        text: format!("    {label}: {value}"),
+        style: config_detail::DetailStyle::EditableField,
+        field: Some(config_detail::FieldKey {
+            file,
+            path: path.to_string(),
+        }),
+        raw_value: Some(value.to_string()),
+        picker: None,
+        action: None,
+        fg_override: None,
+        suffix,
+    });
 }
 
 impl ConfigPanel for HypervisorPanel {
@@ -518,9 +569,24 @@ impl ConfigPanel for HypervisorPanel {
     }
 
     fn receive_data(&mut self, data: PanelData) {
-        if let PanelData::SshProbeResult(status) = data {
-            self.ssh_status = status;
-            self.rebuild_lines();
+        match data {
+            PanelData::SshProbeResult(status) => {
+                self.ssh_status = status;
+                // If SSH is valid and this is a proxmox hypervisor, trigger validation
+                // by setting validation to "checking" — the actual trigger happens
+                // via PanelAction returned from request_probe's caller chain.
+                self.rebuild_lines();
+            }
+            PanelData::ProxmoxValidation(validation) => {
+                // Auto-fix node case if needed
+                if let Some(ref correct_node) = validation.node_auto_fix {
+                    let _ = update_hypervisor_field(&self.name, "proxmox.node", correct_node);
+                    self.reload();
+                }
+                self.proxmox_validation = Some(validation);
+                self.rebuild_lines();
+            }
+            _ => {}
         }
     }
 }

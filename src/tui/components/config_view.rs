@@ -12,6 +12,7 @@ use super::deployment_panel::DeploymentPanel;
 use super::hypervisor_panel::HypervisorPanel;
 use super::popup_picker::{PopupAction, PopupPicker};
 use crate::config::editor::create_hypervisor;
+use crate::ssh::probe::SshProbeStatus;
 use crate::config::loader::{
     find_referencing_deployments, list_deployments, list_hypervisors, load_deployment,
     load_deployment_state, load_hypervisor,
@@ -45,6 +46,8 @@ pub enum ConfigViewEvent {
     FetchGitRefs { repo_url: String },
     /// Request SSH credential probe.
     ProbeSsh { host: String, user: String },
+    /// Request Proxmox config validation.
+    ValidateProxmox { host: String, user: String },
     /// A hypervisor was deleted.
     HypervisorDeleted { name: String },
 }
@@ -259,11 +262,32 @@ impl ConfigView {
         }
     }
 
-    /// Deliver async data (git refs) to the active panel.
-    pub fn deliver_data(&mut self, data: PanelData) {
+    /// Deliver async data to the active panel.
+    /// Returns an optional follow-up event (e.g. SSH valid → trigger Proxmox validation).
+    pub fn deliver_data(&mut self, data: PanelData) -> Option<ConfigViewEvent> {
+        // Check if this is an SSH probe result that should trigger Proxmox validation
+        let trigger_proxmox = matches!(
+            (&data, &self.active_panel),
+            (PanelData::SshProbeResult(SshProbeStatus::Valid), ActivePanel::Hypervisor(_))
+        );
+
         if let Some(panel) = self.active_panel_mut() {
             panel.receive_data(data);
         }
+
+        if trigger_proxmox {
+            if let ActivePanel::Hypervisor(panel) = &mut self.active_panel {
+                if panel.proxmox_config().is_some() {
+                    let host = panel.credentials_host().to_string();
+                    let user = panel.credentials_user().to_string();
+                    if !host.is_empty() {
+                        panel.set_proxmox_checking();
+                        return Some(ConfigViewEvent::ValidateProxmox { host, user });
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Cancel any pending async fetch on the active panel.
@@ -271,6 +295,15 @@ impl ConfigView {
         if let Some(panel) = self.active_panel_mut() {
             // Send an Esc key to cancel fetching state
             panel.handle_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
+        }
+    }
+
+    /// Get the Proxmox config from the active hypervisor panel (if any).
+    pub fn active_hypervisor_proxmox_config(&self) -> Option<crate::config::types::ProxmoxHypervisorConfig> {
+        if let ActivePanel::Hypervisor(panel) = &self.active_panel {
+            panel.proxmox_config()
+        } else {
+            None
         }
     }
 
@@ -312,6 +345,9 @@ impl ConfigView {
                 }
                 PanelAction::ProbeSsh { host, user } => {
                     ConfigViewEvent::ProbeSsh { host, user }
+                }
+                PanelAction::ValidateProxmox { host, user } => {
+                    ConfigViewEvent::ValidateProxmox { host, user }
                 }
                 PanelAction::Deleted { ref name } => {
                     let name = name.clone();

@@ -401,6 +401,7 @@ impl DeploymentPanel {
                 picker: None,
                 action: None,
                 fg_override: None,
+                suffix: None,
             });
             // Host header with connectivity dot
             host_tab.push(DetailLine {
@@ -411,6 +412,7 @@ impl DeploymentPanel {
                 picker: None,
                 action: None,
                 fg_override: Some(color),
+                suffix: None,
             });
             push_editable(
                 &mut host_tab,
@@ -1121,6 +1123,7 @@ impl ConfigPanel for DeploymentPanel {
                 }
                 self.rebuild_detail_lines();
             }
+            _ => {} // Ignore data types not relevant to this panel
         }
     }
 }

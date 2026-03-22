@@ -393,6 +393,10 @@ impl App {
                 self.spawn_ssh_probe(&host, &user);
                 EventResult::Consumed(None)
             }
+            ConfigViewEvent::ValidateProxmox { host, user } => {
+                self.spawn_proxmox_validation(&host, &user);
+                EventResult::Consumed(None)
+            }
             ConfigViewEvent::HypervisorDeleted { name } => {
                 tracing::info!("Hypervisor '{name}' deleted");
                 EventResult::Consumed(None)
@@ -586,8 +590,19 @@ impl App {
             }
             AppEvent::SshProbeResult { host, user, status } => {
                 tracing::debug!("SSH probe {user}@{host}: {status:?}");
-                self.config_view.deliver_data(
+                let follow_up = self.config_view.deliver_data(
                     crate::tui::components::config_detail::PanelData::SshProbeResult(*status),
+                );
+                // Chain: SSH valid → trigger Proxmox validation
+                if let Some(crate::tui::components::config_view::ConfigViewEvent::ValidateProxmox { host, user }) = follow_up {
+                    self.spawn_proxmox_validation(&host, &user);
+                }
+            }
+            AppEvent::ProxmoxValidated(validation) => {
+                tracing::debug!("Proxmox validation: node={:?} disk={:?} iso_storage={:?} iso_file={:?}",
+                    validation.node, validation.disk_storage, validation.iso_storage, validation.iso_file);
+                self.config_view.deliver_data(
+                    crate::tui::components::config_detail::PanelData::ProxmoxValidation(validation.clone()),
                 );
             }
         }
@@ -889,6 +904,26 @@ impl App {
                 user,
                 status,
             }));
+        });
+    }
+
+    fn spawn_proxmox_validation(&mut self, host: &str, user: &str) {
+        let Some(tx) = self.app_event_tx.clone() else {
+            return;
+        };
+        let host = host.to_string();
+        let user = user.to_string();
+        // We need the proxmox config to validate against. Read it from the active panel.
+        let proxmox_config = if let Some(panel) = self.config_view.active_hypervisor_proxmox_config() {
+            panel
+        } else {
+            return;
+        };
+        tokio::spawn(async move {
+            let validation = crate::ops::hypervisor_proxmox_validate::validate_proxmox(
+                &host, &user, &proxmox_config,
+            ).await;
+            let _ = tx.send(Event::App(AppEvent::ProxmoxValidated(validation)));
         });
     }
 

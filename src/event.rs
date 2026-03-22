@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::git::RepoRefs;
+use crate::ops::hypervisor_proxmox_validate::ProxmoxValidation;
 use crate::ops::recover::RecoveryEvent;
 use crate::ops::status::HostStatus;
 use crate::ssh::probe::SshProbeStatus;
@@ -44,6 +45,8 @@ pub enum AppEvent {
         user: String,
         status: SshProbeStatus,
     },
+    /// Proxmox config validation completed
+    ProxmoxValidated(ProxmoxValidation),
 }
 
 #[derive(Debug, Clone)]

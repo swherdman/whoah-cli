@@ -1,5 +1,6 @@
 pub mod demo;
 pub mod deploy;
+pub mod hypervisor_proxmox_validate;
 pub mod import;
 pub mod nexus;
 pub mod pipeline;

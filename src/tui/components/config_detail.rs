@@ -42,6 +42,8 @@ pub enum PanelAction {
     FetchGitRefs { repo_url: String },
     /// Request SSH credential probe.
     ProbeSsh { host: String, user: String },
+    /// Request Proxmox config validation.
+    ValidateProxmox { host: String, user: String },
     /// Panel deleted its config — parent should clean up.
     Deleted { name: String },
     /// Display an error.
@@ -52,6 +54,7 @@ pub enum PanelAction {
 pub enum PanelData {
     GitRefs(RepoRefs),
     SshProbeResult(crate::ssh::probe::SshProbeStatus),
+    ProxmoxValidation(crate::ops::hypervisor_proxmox_validate::ProxmoxValidation),
 }
 
 // ── Detail line types ──────────────────────────────────────────────────
@@ -71,6 +74,8 @@ pub struct DetailLine {
     pub action: Option<LineAction>,
     /// Optional foreground color override (for status indicators).
     pub fg_override: Option<Color>,
+    /// Optional suffix appended after the main text with its own color (e.g. "●" status dot).
+    pub suffix: Option<(String, Color)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -114,6 +119,7 @@ pub fn push_header(lines: &mut Vec<DetailLine>, title: &str) {
         picker: None,
         action: None,
         fg_override: None,
+        suffix: None,
     });
     lines.push(DetailLine {
         text: format!("  {title}"),
@@ -123,6 +129,7 @@ pub fn push_header(lines: &mut Vec<DetailLine>, title: &str) {
         picker: None,
         action: None,
         fg_override: None,
+        suffix: None,
     });
 }
 
@@ -135,6 +142,7 @@ pub fn push_field(lines: &mut Vec<DetailLine>, label: &str, value: &str) {
         picker: None,
         action: None,
         fg_override: None,
+        suffix: None,
     });
 }
 
@@ -156,6 +164,7 @@ pub fn push_editable(
         picker: None,
         action: None,
         fg_override: None,
+        suffix: None,
     });
 }
 
@@ -178,6 +187,7 @@ pub fn push_pickable(
         picker: Some(kind),
         action: None,
         fg_override: None,
+        suffix: None,
     });
 }
 
@@ -190,6 +200,7 @@ pub fn push_danger_action(lines: &mut Vec<DetailLine>, text: &str, action: LineA
         picker: None,
         action: None,
         fg_override: None,
+        suffix: None,
     });
     lines.push(DetailLine {
         text: format!("  {text}"),
@@ -199,6 +210,7 @@ pub fn push_danger_action(lines: &mut Vec<DetailLine>, text: &str, action: LineA
         picker: None,
         action: Some(action),
         fg_override: None,
+        suffix: None,
     });
 }
 
@@ -314,15 +326,19 @@ pub fn render_detail_lines(
                 base_style = base_style.fg(color);
             }
 
-            if is_selected {
-                let highlight = if dl.field.is_some() || dl.action.is_some() {
-                    base_style.bg(p.bg_hover)
-                } else {
-                    base_style
-                };
-                Line::from(Span::styled(&dl.text, highlight))
+            let style = if is_selected && (dl.field.is_some() || dl.action.is_some()) {
+                base_style.bg(p.bg_hover)
             } else {
-                Line::from(Span::styled(&dl.text, base_style))
+                base_style
+            };
+
+            if let Some((ref suffix_text, suffix_color)) = dl.suffix {
+                Line::from(vec![
+                    Span::styled(&dl.text, style),
+                    Span::styled(format!(" {suffix_text}"), Style::default().fg(suffix_color)),
+                ])
+            } else {
+                Line::from(Span::styled(&dl.text, style))
             }
         })
         .collect();
