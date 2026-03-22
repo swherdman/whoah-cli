@@ -44,6 +44,13 @@ pub enum PanelAction {
     ProbeSsh { host: String, user: String },
     /// Request Proxmox config validation.
     ValidateProxmox { host: String, user: String },
+    /// Request ISO download to Proxmox host.
+    DownloadIso {
+        host: String,
+        user: String,
+        iso_storage_path: String,
+        filename: String,
+    },
     /// Panel deleted its config — parent should clean up.
     Deleted { name: String },
     /// Display an error.
@@ -106,6 +113,7 @@ pub enum PickerKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LineAction {
     DeleteHypervisor,
+    DownloadIso,
 }
 
 // ── Builder helpers ────────────────────────────────────────────────────

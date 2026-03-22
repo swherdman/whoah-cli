@@ -47,6 +47,11 @@ pub enum AppEvent {
     },
     /// Proxmox config validation completed
     ProxmoxValidated(ProxmoxValidation),
+    /// ISO download completed
+    IsoDownloadResult {
+        filename: String,
+        result: Result<(), String>,
+    },
 }
 
 #[derive(Debug, Clone)]

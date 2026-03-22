@@ -48,6 +48,13 @@ pub enum ConfigViewEvent {
     ProbeSsh { host: String, user: String },
     /// Request Proxmox config validation.
     ValidateProxmox { host: String, user: String },
+    /// Request ISO download.
+    DownloadIso {
+        host: String,
+        user: String,
+        iso_storage_path: String,
+        filename: String,
+    },
     /// A hypervisor was deleted.
     HypervisorDeleted { name: String },
 }
@@ -307,6 +314,18 @@ impl ConfigView {
         }
     }
 
+    /// Get credentials from the active hypervisor panel (if any).
+    pub fn active_hypervisor_credentials(&self) -> Option<(String, String)> {
+        if let ActivePanel::Hypervisor(panel) = &self.active_panel {
+            let host = panel.credentials_host().to_string();
+            let user = panel.credentials_user().to_string();
+            if !host.is_empty() {
+                return Some((host, user));
+            }
+        }
+        None
+    }
+
     /// Whether the active panel is capturing input (for status bar display).
     pub fn is_capturing(&self) -> bool {
         match &self.active_panel {
@@ -348,6 +367,9 @@ impl ConfigView {
                 }
                 PanelAction::ValidateProxmox { host, user } => {
                     ConfigViewEvent::ValidateProxmox { host, user }
+                }
+                PanelAction::DownloadIso { host, user, iso_storage_path, filename } => {
+                    ConfigViewEvent::DownloadIso { host, user, iso_storage_path, filename }
                 }
                 PanelAction::Deleted { ref name } => {
                     let name = name.clone();

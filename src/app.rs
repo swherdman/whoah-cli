@@ -397,6 +397,10 @@ impl App {
                 self.spawn_proxmox_validation(&host, &user);
                 EventResult::Consumed(None)
             }
+            ConfigViewEvent::DownloadIso { host, user, iso_storage_path, filename } => {
+                self.spawn_iso_download(&host, &user, &iso_storage_path, &filename);
+                EventResult::Consumed(None)
+            }
             ConfigViewEvent::HypervisorDeleted { name } => {
                 tracing::info!("Hypervisor '{name}' deleted");
                 EventResult::Consumed(None)
@@ -596,6 +600,20 @@ impl App {
                 // Chain: SSH valid → trigger Proxmox validation
                 if let Some(crate::tui::components::config_view::ConfigViewEvent::ValidateProxmox { host, user }) = follow_up {
                     self.spawn_proxmox_validation(&host, &user);
+                }
+            }
+            AppEvent::IsoDownloadResult { filename, result } => {
+                match result {
+                    Ok(()) => {
+                        tracing::info!("ISO download complete: {filename}");
+                        // Re-trigger Proxmox validation to update the iso_file dot
+                        if let Some((host, user)) = self.config_view.active_hypervisor_credentials() {
+                            self.spawn_proxmox_validation(&host, &user);
+                        }
+                    }
+                    Err(ref msg) => {
+                        tracing::error!("ISO download failed: {msg}");
+                    }
                 }
             }
             AppEvent::ProxmoxValidated(validation) => {
@@ -924,6 +942,28 @@ impl App {
                 &host, &user, &proxmox_config,
             ).await;
             let _ = tx.send(Event::App(AppEvent::ProxmoxValidated(validation)));
+        });
+    }
+
+    fn spawn_iso_download(&mut self, host: &str, user: &str, iso_storage_path: &str, filename: &str) {
+        let Some(tx) = self.app_event_tx.clone() else {
+            return;
+        };
+        let host = host.to_string();
+        let user = user.to_string();
+        let path = iso_storage_path.to_string();
+        let filename = filename.to_string();
+        tracing::info!("Starting ISO download: {filename} to {host}:{path}");
+        tokio::spawn(async move {
+            let result = crate::ops::hypervisor_proxmox_validate::download_iso(
+                &host, &user, &path, &filename,
+            )
+            .await
+            .map_err(|e| e.to_string());
+            let _ = tx.send(Event::App(AppEvent::IsoDownloadResult {
+                filename,
+                result,
+            }));
         });
     }
 

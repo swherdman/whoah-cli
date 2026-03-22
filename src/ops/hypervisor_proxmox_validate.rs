@@ -281,6 +281,29 @@ async fn ssh_command(host: &str, user: &str, cmd: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Download an ISO file to the Proxmox host's ISO storage via wget.
+/// Returns Ok on success, Err with a message on failure.
+pub async fn download_iso(
+    host: &str,
+    user: &str,
+    iso_storage_path: &str,
+    filename: &str,
+) -> Result<()> {
+    let url = format!("https://pkg.oxide.computer/install/latest/{filename}");
+    let dest = format!("{iso_storage_path}/template/iso/{filename}");
+
+    // Check if wget is available
+    ssh_command(host, user, "which wget")
+        .await
+        .map_err(|_| eyre!("wget not found on Proxmox host"))?;
+
+    // Download with wget — quiet mode, show progress via stderr
+    let cmd = format!("wget -q -O '{dest}' '{url}'");
+    ssh_command(host, user, &cmd).await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

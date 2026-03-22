@@ -21,7 +21,8 @@ use crate::tui::theme::Palette;
 enum EditMode {
     Viewing,
     Editing { input: Input },
-    TypePicker { picker: PopupPicker },
+    /// Popup picker for selecting from a list (type, node, storage, iso_file).
+    PickerSelect { picker: PopupPicker },
     DeleteConfirm,
 }
 
@@ -132,10 +133,11 @@ impl HypervisorPanel {
             return PanelEvent::Consumed;
         };
 
-        // Handle action lines (delete)
+        // Handle action lines (delete, download)
         if let Some(action) = &line.action {
             return match action {
                 LineAction::DeleteHypervisor => self.start_delete(),
+                LineAction::DownloadIso => self.start_download(),
             };
         }
 
@@ -144,21 +146,54 @@ impl HypervisorPanel {
             return PanelEvent::Consumed;
         }
 
-        // Check if this is the type field (uses picker)
-        let is_type_field = line
-            .field
-            .as_ref()
-            .map(|f| f.path == "hypervisor.type")
-            .unwrap_or(false);
+        let field_path = line.field.as_ref().map(|f| f.path.as_str()).unwrap_or("");
 
-        if is_type_field {
-            let options = vec!["proxmox".to_string()]; // Only proxmox for now
-            self.edit_mode = EditMode::TypePicker {
-                picker: PopupPicker::new("Select hypervisor type", options),
-            };
+        // Fields that use pickers instead of free-text input
+        let picker = match field_path {
+            "hypervisor.type" => {
+                Some(PopupPicker::new("Select hypervisor type", vec!["proxmox".to_string()]))
+            }
+            "proxmox.node" => {
+                let options = self.proxmox_validation.as_ref()
+                    .map(|v| v.available_nodes.clone())
+                    .unwrap_or_default();
+                if options.is_empty() { None } else {
+                    Some(PopupPicker::new("Select node", options))
+                }
+            }
+            "proxmox.disk_storage" => {
+                let options = self.proxmox_validation.as_ref()
+                    .map(|v| v.available_disk_storages.clone())
+                    .unwrap_or_default();
+                if options.is_empty() { None } else {
+                    Some(PopupPicker::new("Select disk storage", options))
+                }
+            }
+            "proxmox.iso_storage" => {
+                let options = self.proxmox_validation.as_ref()
+                    .map(|v| v.available_iso_storages.clone())
+                    .unwrap_or_default();
+                if options.is_empty() { None } else {
+                    Some(PopupPicker::new("Select ISO storage", options))
+                }
+            }
+            "proxmox.iso_file" => {
+                let options = self.proxmox_validation.as_ref()
+                    .map(|v| v.available_iso_files.clone())
+                    .unwrap_or_default();
+                if options.is_empty() { None } else {
+                    Some(PopupPicker::new("Select ISO file", options))
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(picker) = picker {
+            self.edit_mode = EditMode::PickerSelect { picker };
             return PanelEvent::Consumed;
         }
 
+        // Default: free-text editing
         let value = line.raw_value.clone().unwrap_or_default();
         self.edit_mode = EditMode::Editing {
             input: Input::new(value),
@@ -180,15 +215,24 @@ impl HypervisorPanel {
         self.edit_mode = EditMode::Viewing;
         self.persist_field(&new_value)?;
 
-        // Re-probe if a credential field was edited
-        let is_credential = field_path.as_deref()
-            .map(|p| p == "credentials.host" || p == "credentials.ssh_user")
-            .unwrap_or(false);
-        if is_credential {
-            Ok(self.request_probe())
-        } else {
-            Ok(None)
+        let path = field_path.as_deref().unwrap_or("");
+
+        // Re-probe SSH if a credential field was edited
+        if path == "credentials.host" || path == "credentials.ssh_user" {
+            return Ok(self.request_probe());
         }
+
+        // Re-validate Proxmox if a Proxmox field was edited via free-text
+        if path.starts_with("proxmox.") && !self.config.credentials.host.is_empty() {
+            self.proxmox_validation = Some(ProxmoxValidation::checking());
+            self.rebuild_lines();
+            return Ok(Some(PanelAction::ValidateProxmox {
+                host: self.config.credentials.host.clone(),
+                user: self.config.credentials.ssh_user.clone(),
+            }));
+        }
+
+        Ok(None)
     }
 
     fn persist_field(&mut self, new_value: &str) -> Result<(), String> {
@@ -218,6 +262,26 @@ impl HypervisorPanel {
         }
     }
 
+    fn start_download(&self) -> PanelEvent {
+        let Some(ref validation) = self.proxmox_validation else {
+            return PanelEvent::Consumed;
+        };
+        let Some(ref storage_path) = validation.iso_storage_path else {
+            return PanelEvent::Action(PanelAction::Error(
+                "Cannot download: iso_storage path unknown".into(),
+            ));
+        };
+        let Some(px) = &self.config.proxmox else {
+            return PanelEvent::Consumed;
+        };
+        PanelEvent::Action(PanelAction::DownloadIso {
+            host: self.config.credentials.host.clone(),
+            user: self.config.credentials.ssh_user.clone(),
+            iso_storage_path: storage_path.clone(),
+            filename: px.iso_file.clone(),
+        })
+    }
+
     fn start_delete(&mut self) -> PanelEvent {
         if !self.referencing_deployments.is_empty() {
             let refs = self.referencing_deployments.join(", ");
@@ -241,8 +305,8 @@ impl HypervisorPanel {
         })
     }
 
-    fn handle_type_picker_key(&mut self, key: KeyEvent) -> PanelEvent {
-        let EditMode::TypePicker { ref mut picker } = self.edit_mode else {
+    fn handle_picker_key(&mut self, key: KeyEvent) -> PanelEvent {
+        let EditMode::PickerSelect { ref mut picker } = self.edit_mode else {
             return PanelEvent::Consumed;
         };
         match picker.handle_key(key) {
@@ -252,10 +316,24 @@ impl HypervisorPanel {
                 PanelEvent::Consumed
             }
             PopupAction::Selected(_, value) => {
+                // Check if this is a Proxmox field before clearing edit mode
+                let is_proxmox_field = self.lines.get(self.selected)
+                    .and_then(|l| l.field.as_ref())
+                    .map(|f| f.path.starts_with("proxmox."))
+                    .unwrap_or(false);
+
                 self.edit_mode = EditMode::Viewing;
-                // Persist the type change
                 if let Err(msg) = self.persist_field(&value) {
-                    PanelEvent::Action(PanelAction::Error(msg))
+                    return PanelEvent::Action(PanelAction::Error(msg));
+                }
+                // Re-validate Proxmox config after changing a Proxmox field
+                if is_proxmox_field && !self.config.credentials.host.is_empty() {
+                    self.proxmox_validation = Some(ProxmoxValidation::checking());
+                    self.rebuild_lines();
+                    PanelEvent::Action(PanelAction::ValidateProxmox {
+                        host: self.config.credentials.host.clone(),
+                        user: self.config.credentials.ssh_user.clone(),
+                    })
                 } else {
                     PanelEvent::Consumed
                 }
@@ -328,6 +406,35 @@ impl HypervisorPanel {
 
         // Type-specific section
         build_type_section(&mut lines, &self.config, self.proxmox_validation.as_ref());
+
+        // Download action — only shown when ISO file is missing
+        if let Some(ref validation) = self.proxmox_validation {
+            if matches!(validation.iso_file, FieldStatus::Invalid(_)) {
+                if let Some(px) = &self.config.proxmox {
+                    let p = Palette::default();
+                    lines.push(DetailLine {
+                        text: String::new(),
+                        style: DetailStyle::SectionHeader,
+                        field: None,
+                        raw_value: None,
+                        picker: None,
+                        action: None,
+                        fg_override: None,
+                        suffix: None,
+                    });
+                    lines.push(DetailLine {
+                        text: format!("  Download {}", px.iso_file),
+                        style: DetailStyle::EditableField,
+                        field: None,
+                        raw_value: None,
+                        picker: None,
+                        action: Some(LineAction::DownloadIso),
+                        fg_override: Some(p.green_primary),
+                        suffix: None,
+                    });
+                }
+            }
+        }
 
         // Delete action
         if self.referencing_deployments.is_empty() {
@@ -449,8 +556,8 @@ impl ConfigPanel for HypervisorPanel {
 
     fn handle_key(&mut self, key: KeyEvent) -> PanelEvent {
         // Type picker overlay
-        if matches!(self.edit_mode, EditMode::TypePicker { .. }) {
-            return self.handle_type_picker_key(key);
+        if matches!(self.edit_mode, EditMode::PickerSelect { .. }) {
+            return self.handle_picker_key(key);
         }
 
         // Inline text editing
@@ -563,7 +670,7 @@ impl ConfigPanel for HypervisorPanel {
         }
 
         // Overlay: type picker
-        if let EditMode::TypePicker { ref picker } = self.edit_mode {
+        if let EditMode::PickerSelect { ref picker } = self.edit_mode {
             picker.render(frame, area, p);
         }
     }
