@@ -8,7 +8,6 @@ use color_eyre::{eyre::eyre, Result};
 use serde::Deserialize;
 
 use crate::config::types::ProxmoxHypervisorConfig;
-use crate::ssh::probe::SshProbeStatus;
 
 /// Per-field validation status.
 #[derive(Debug, Clone, PartialEq, Eq)]

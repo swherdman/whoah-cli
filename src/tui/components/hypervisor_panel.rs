@@ -569,7 +569,7 @@ fn push_validated_field(
         FieldStatus::Unknown => ("●".to_string(), p.text_disabled),
         FieldStatus::Checking => ("●".to_string(), p.text_disabled),
         FieldStatus::Valid => ("●".to_string(), p.green_primary),
-        FieldStatus::Invalid(reason) => ("●".to_string(), p.red_error),
+        FieldStatus::Invalid(_) => ("●".to_string(), p.red_error),
     });
 
     lines.push(DetailLine {

@@ -614,7 +614,7 @@ impl App {
                     self.spawn_proxmox_validation(&host, &user);
                 }
             }
-            AppEvent::DownloadProgress { filename, percent } => {
+            AppEvent::DownloadProgress { filename: _, percent } => {
                 self.config_view.deliver_data(
                     crate::tui::components::config_detail::PanelData::DownloadProgress { percent: *percent },
                 );

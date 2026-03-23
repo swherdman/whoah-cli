@@ -1115,7 +1115,7 @@ impl ConfigPanel for DeploymentPanel {
             }
             PanelData::SshProbeResult(status) => {
                 // Match the probe result IP back to a host name
-                for (name, host) in &self.config.deployment.hosts {
+                for (name, _host) in &self.config.deployment.hosts {
                     if self.ssh_status.get(name) == Some(&SshProbeStatus::Checking) {
                         self.ssh_status.insert(name.clone(), status);
                         break;

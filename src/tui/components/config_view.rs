@@ -1427,8 +1427,8 @@ impl ConfigView {
         match &self.create_flow {
             CreateFlow::Inactive => {}
             CreateFlow::HypervisorType { ref picker }
-            | CreateFlow::DeploymentMode { picker: ref picker, .. }
-            | CreateFlow::DeploymentHypervisor { picker: ref picker, .. } => {
+            | CreateFlow::DeploymentMode { ref picker, .. }
+            | CreateFlow::DeploymentHypervisor { ref picker, .. } => {
                 picker.render(frame, inner, p);
             }
             CreateFlow::HypervisorName { htype, ref input } => {
