@@ -1202,6 +1202,40 @@ print('Updated vdevs to {vdev_count}')
     ssh.set_step("build-compile");
     ssh.detail("Compiling omicron-package...").await;
 
+    // Spawn parallel crate count query for progress percentage
+    {
+        let count_tx = tx.clone();
+        let count_config = helios_config.clone();
+        let count_repo = repo_path.to_string();
+        tokio::spawn(async move {
+            let count_ssh = match DirectSsh::connect(&count_config).await {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::debug!("Crate count SSH failed (non-fatal): {e}");
+                    return;
+                }
+            };
+            let result = count_ssh.execute(&format!(
+                "cd {count_repo} && bash -c '. ~/.cargo/env && source env.sh && \
+                 cargo tree --prefix none -e normal,build -p omicron-package 2>/dev/null | \
+                 sed \"s/ (.*//\" | sort -u | wc -l'"
+            )).await;
+            match result {
+                Ok(output) if output.exit_code == 0 => {
+                    if let Ok(total) = output.stdout.trim().parse::<u32>() {
+                        if total > 0 {
+                            let _ = count_tx.send(BuildEvent::CrateCount {
+                                step_id: "build-compile".into(),
+                                total,
+                            });
+                        }
+                    }
+                }
+                _ => tracing::debug!("cargo tree query failed (non-fatal)"),
+            }
+        });
+    }
+
     // Use proxy — cargo downloads crates from crates.io/github via HTTPS
     ssh.run_streaming_check_with_proxy(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \

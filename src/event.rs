@@ -95,6 +95,8 @@ pub enum BuildEvent {
     StepFailed(String, String),
     /// Build discovered the VM's actual IP (may differ from config)
     HostDiscovered { address: String, ssh_user: String },
+    /// Total crate count discovered via cargo tree (for percentage display)
+    CrateCount { step_id: String, total: u32 },
     /// Build pipeline finished (success or failure)
     PipelineFinished { success: bool },
 }

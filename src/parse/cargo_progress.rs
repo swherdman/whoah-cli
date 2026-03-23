@@ -70,6 +70,8 @@ pub struct CargoTracker {
     pub last_crate: Option<String>,
     pub finished: bool,
     pub finish_duration: Option<String>,
+    /// Total crate count from cargo tree (for percentage display).
+    pub estimated_total: Option<u32>,
 }
 
 impl CargoTracker {
@@ -90,6 +92,10 @@ impl CargoTracker {
         }
     }
 
+    pub fn set_estimated_total(&mut self, total: u32) {
+        self.estimated_total = Some(total);
+    }
+
     /// Format a summary of the current state.
     pub fn summary(&self) -> String {
         if self.finished {
@@ -99,7 +105,12 @@ impl CargoTracker {
             return "Finished".to_string();
         }
         if let Some(ref name) = self.last_crate {
-            format!("Compiling {name} ({} crates)", self.compiled_count)
+            if let Some(total) = self.estimated_total {
+                let pct = (self.compiled_count as f32 / total as f32 * 100.0).min(100.0) as u32;
+                format!("Compiling {name} ({}/{total} \u{2014} {pct}%)", self.compiled_count)
+            } else {
+                format!("Compiling {name} ({} crates)", self.compiled_count)
+            }
         } else if self.downloaded_count > 0 {
             format!("Downloaded {} crates", self.downloaded_count)
         } else {
@@ -185,5 +196,27 @@ mod tests {
 
         t.update(&CargoEvent::Finished { duration: "5m 38s".into() });
         assert_eq!(t.summary(), "Finished in 5m 38s");
+    }
+
+    #[test]
+    fn test_tracker_with_total() {
+        let mut t = CargoTracker::default();
+        t.set_estimated_total(583);
+
+        t.update(&CargoEvent::Compiling { crate_name: "serde".into(), version: None });
+        assert_eq!(t.summary(), "Compiling serde (1/583 \u{2014} 0%)");
+
+        for _ in 0..422 {
+            t.update(&CargoEvent::Compiling { crate_name: "x".into(), version: None });
+        }
+        t.update(&CargoEvent::Compiling { crate_name: "tokio".into(), version: None });
+        assert_eq!(t.summary(), "Compiling tokio (424/583 \u{2014} 72%)");
+    }
+
+    #[test]
+    fn test_tracker_without_total_unchanged() {
+        let mut t = CargoTracker::default();
+        t.update(&CargoEvent::Compiling { crate_name: "serde".into(), version: None });
+        assert_eq!(t.summary(), "Compiling serde (1 crates)");
     }
 }

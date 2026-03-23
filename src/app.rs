@@ -824,6 +824,12 @@ impl App {
                 self.pipeline.fail_step(id, error.clone());
                 tracing::error!("Build: FAILED — {error}");
             }
+            BuildEvent::CrateCount { ref step_id, total } => {
+                tracing::info!("Crate count for {step_id}: {total}");
+                if step_id == "build-compile" {
+                    self.cargo_tracker.set_estimated_total(*total);
+                }
+            }
             BuildEvent::HostDiscovered { address, ssh_user } => {
                 tracing::info!("Build discovered host at {address} (user: {ssh_user})");
 
