@@ -56,7 +56,7 @@ impl SshHost {
             ..Default::default()
         });
 
-        let addr = format!("{}:22", config.address);
+        let addr = format!("{}:{}", config.address, config.ssh_port());
         let handler = SshClientHandler::new();
 
         let mut handle = tokio::time::timeout(

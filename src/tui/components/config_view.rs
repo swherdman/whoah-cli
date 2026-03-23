@@ -45,28 +45,29 @@ pub enum ConfigViewEvent {
     /// Request async git ref fetch.
     FetchGitRefs { repo_url: String },
     /// Request SSH credential probe.
-    ProbeSsh { host: String, user: String },
+    ProbeSsh { host: String, user: String, port: u16 },
     /// Request Proxmox config validation.
-    ValidateProxmox { host: String, user: String },
+    ValidateProxmox { host: String, user: String, port: u16 },
     /// Request ISO download.
     DownloadIso {
         host: String,
         user: String,
+        port: u16,
         iso_storage_path: String,
         filename: String,
     },
     /// Request Proxmox VM list for deployment creation.
     ListProxmoxVms {
-        name: String, host: String, user: String,
+        name: String, host: String, user: String, port: u16,
         hypervisor_ref: String, import: bool,
     },
     /// Request Proxmox VM config query.
     QueryProxmoxVmConfig {
-        name: String, host: String, user: String,
+        name: String, host: String, user: String, port: u16,
         hypervisor_ref: String, vmid: u32,
     },
     /// Request host discovery for importing an existing deployment.
-    DiscoverHost { name: String, host: String, user: String, hypervisor_ref: Option<String> },
+    DiscoverHost { name: String, host: String, user: String, port: u16, hypervisor_ref: Option<String> },
     /// A hypervisor was deleted.
     HypervisorDeleted { name: String },
 }
@@ -322,9 +323,10 @@ impl ConfigView {
                 if panel.proxmox_config().is_some() {
                     let host = panel.credentials_host().to_string();
                     let user = panel.credentials_user().to_string();
+                    let port = panel.credentials_port();
                     if !host.is_empty() {
                         panel.set_proxmox_checking();
-                        return Some(ConfigViewEvent::ValidateProxmox { host, user });
+                        return Some(ConfigViewEvent::ValidateProxmox { host, user, port });
                     }
                 }
             }
@@ -350,12 +352,13 @@ impl ConfigView {
     }
 
     /// Get credentials from the active hypervisor panel (if any).
-    pub fn active_hypervisor_credentials(&self) -> Option<(String, String)> {
+    pub fn active_hypervisor_credentials(&self) -> Option<(String, String, u16)> {
         if let ActivePanel::Hypervisor(panel) = &self.active_panel {
             let host = panel.credentials_host().to_string();
             let user = panel.credentials_user().to_string();
+            let port = panel.credentials_port();
             if !host.is_empty() {
-                return Some((host, user));
+                return Some((host, user, port));
             }
         }
         None
@@ -411,14 +414,14 @@ impl ConfigView {
                 PanelAction::FetchGitRefs { repo_url } => {
                     ConfigViewEvent::FetchGitRefs { repo_url }
                 }
-                PanelAction::ProbeSsh { host, user } => {
-                    ConfigViewEvent::ProbeSsh { host, user }
+                PanelAction::ProbeSsh { host, user, port } => {
+                    ConfigViewEvent::ProbeSsh { host, user, port }
                 }
-                PanelAction::ValidateProxmox { host, user } => {
-                    ConfigViewEvent::ValidateProxmox { host, user }
+                PanelAction::ValidateProxmox { host, user, port } => {
+                    ConfigViewEvent::ValidateProxmox { host, user, port }
                 }
-                PanelAction::DownloadIso { host, user, iso_storage_path, filename } => {
-                    ConfigViewEvent::DownloadIso { host, user, iso_storage_path, filename }
+                PanelAction::DownloadIso { host, user, port, iso_storage_path, filename } => {
+                    ConfigViewEvent::DownloadIso { host, user, port, iso_storage_path, filename }
                 }
                 PanelAction::Deleted { ref name } => {
                     let name = name.clone();
@@ -491,8 +494,8 @@ impl ConfigView {
     fn request_panel_probe(&mut self) -> Option<ConfigViewEvent> {
         match &mut self.active_panel {
             ActivePanel::Hypervisor(panel) => {
-                if let Some(PanelAction::ProbeSsh { host, user }) = panel.request_probe() {
-                    return Some(ConfigViewEvent::ProbeSsh { host, user });
+                if let Some(PanelAction::ProbeSsh { host, user, port }) = panel.request_probe() {
+                    return Some(ConfigViewEvent::ProbeSsh { host, user, port });
                 }
             }
             ActivePanel::Deployment(panel) => {
@@ -500,8 +503,8 @@ impl ConfigView {
                 // have multiple hosts, dispatch all probes (e.g. return a Vec or
                 // accumulate additional events for App to drain).
                 let actions = panel.request_probes();
-                if let Some(PanelAction::ProbeSsh { host, user }) = actions.into_iter().next() {
-                    return Some(ConfigViewEvent::ProbeSsh { host, user });
+                if let Some(PanelAction::ProbeSsh { host, user, port }) = actions.into_iter().next() {
+                    return Some(ConfigViewEvent::ProbeSsh { host, user, port });
                 }
             }
             _ => {}
@@ -892,7 +895,7 @@ impl ConfigView {
                                     format!("Discovering config from {user}@{host}..."),
                                 );
                                 return ConfigViewEvent::DiscoverHost {
-                                    name, host, user, hypervisor_ref: None,
+                                    name, host, user, port: 22, hypervisor_ref: None,
                                 };
                             }
                             self.create_new_deployment(&name, &host, &user, None);
@@ -911,7 +914,7 @@ impl ConfigView {
                                 message: "Loading VMs from Proxmox...".into(),
                             };
                             return ConfigViewEvent::ListProxmoxVms {
-                                name, host, user,
+                                name, host, user, port: 22,
                                 hypervisor_ref, import,
                             };
                         }
@@ -924,7 +927,7 @@ impl ConfigView {
                                 format!("Discovering config from {user}@{host}..."),
                             );
                             return ConfigViewEvent::DiscoverHost {
-                                name, host, user, hypervisor_ref: Some(hypervisor_ref),
+                                name, host, user, port: 22, hypervisor_ref: Some(hypervisor_ref),
                             };
                         }
                         self.create_new_deployment(&name, &host, &user, Some(&hypervisor_ref));
@@ -998,7 +1001,7 @@ impl ConfigView {
                             message: format!("Loading VM {} config...", vmid),
                         };
                         ConfigViewEvent::QueryProxmoxVmConfig {
-                            name, host, user, hypervisor_ref, vmid,
+                            name, host, user, port: 22, hypervisor_ref, vmid,
                         }
                     }
                 }
@@ -1034,6 +1037,7 @@ impl ConfigView {
                 } else {
                     Some(crate::config::types::HostType::BareMetal)
                 },
+                ssh_port: None,
             },
         );
 
@@ -1112,6 +1116,7 @@ impl ConfigView {
                 ssh_user: ssh_user.to_string(),
                 role: crate::config::types::HostRole::Combined,
                 host_type: Some(crate::config::types::HostType::Vm),
+                ssh_port: None,
             },
         );
 
@@ -1238,6 +1243,7 @@ impl ConfigView {
                 } else {
                     Some(crate::config::types::HostType::BareMetal)
                 },
+                ssh_port: None,
             },
         );
 

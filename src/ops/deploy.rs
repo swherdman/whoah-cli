@@ -38,6 +38,7 @@ pub async fn run_deploy(
         ssh_user: proxmox_config.ssh_user.clone(),
         role: crate::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
     let pve = SshHost::connect(&pve_host_config).await?;
 
@@ -141,6 +142,7 @@ async fn run_provision(
     let mut console = SerialConsole::connect_with_log(
         &config.host,
         &config.ssh_user,
+        config.ssh_port(),
         vmid,
         Some(build_log.clone()),
     )
@@ -317,6 +319,7 @@ async fn run_provision(
     let mut console = SerialConsole::connect_with_log(
         &config.host,
         &config.ssh_user,
+        config.ssh_port(),
         vmid,
         Some(build_log.clone()),
     )
@@ -580,6 +583,7 @@ async fn run_configure_access(
         ssh_user: username.clone(),
         role: crate::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
 
     let helios = SshHost::connect(&helios_host_config).await.map_err(|e| {
@@ -719,6 +723,7 @@ async fn run_os_setup(
         ssh_user: ssh_user.to_string(),
         role: crate::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
 
     let log_path = build_log.clone();
@@ -812,6 +817,7 @@ async fn continue_os_setup_after_reboot(
         ssh_user: ssh_user.to_string(),
         role: crate::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
 
     let helios = SshHost::connect(&helios_config).await?;
@@ -941,6 +947,7 @@ async fn run_omicron_build(
         ssh_user: ssh_user.to_string(),
         role: crate::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
 
     let log_path = build_log.clone();
@@ -1659,6 +1666,7 @@ async fn wait_for_ssh(ip: &str, user: &str, timeout: Duration) -> Result<()> {
         ssh_user: user.to_string(),
         role: crate::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
 
     loop {
@@ -1718,6 +1726,7 @@ async fn run_setup_pkg_cache(
         ssh_user: ssh_user.to_string(),
         role: crate::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
     let helios = SshHost::connect(&helios_config).await.map_err(|e| {
         send(tx, BuildEvent::StepFailed("cache-configure".into(), format!("SSH failed: {e}")));

@@ -554,6 +554,7 @@ mod tests {
                             ssh_user: "testuser".to_string(),
                             role: HostRole::Combined,
                             host_type: None,
+                            ssh_port: None,
                         },
                     );
                     h

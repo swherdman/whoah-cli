@@ -25,11 +25,12 @@ pub struct DiscoveredConfig {
 /// Reads config-rss.toml for network settings and config.toml + vdev files
 /// for build overrides. Returns an error if config-rss.toml is not found
 /// (Omicron not installed on host).
-pub async fn discover_config(host: &str, user: &str) -> Result<DiscoveredConfig> {
+pub async fn discover_config(host: &str, user: &str, port: u16) -> Result<DiscoveredConfig> {
     // Read config-rss.toml for network settings
     let rss_contents = ssh_command(
         host,
         user,
+        port,
         "cat ~/omicron/smf/sled-agent/non-gimlet/config-rss.toml 2>/dev/null",
     )
     .await
@@ -43,6 +44,7 @@ pub async fn discover_config(host: &str, user: &str) -> Result<DiscoveredConfig>
     let vdev_count = match ssh_command(
         host,
         user,
+        port,
         "cat ~/omicron/smf/sled-agent/non-gimlet/config.toml 2>/dev/null",
     )
     .await
@@ -55,6 +57,7 @@ pub async fn discover_config(host: &str, user: &str) -> Result<DiscoveredConfig>
     let vdev_size_bytes = ssh_command(
         host,
         user,
+        port,
         "ls -l /var/tmp/*.vdev 2>/dev/null | head -1 | awk '{print $5}'",
     )
     .await
@@ -65,6 +68,7 @@ pub async fn discover_config(host: &str, user: &str) -> Result<DiscoveredConfig>
     let cockroachdb_redundancy = ssh_command(
         host,
         user,
+        port,
         "grep 'COCKROACHDB_REDUNDANCY' ~/omicron/common/src/policy.rs 2>/dev/null",
     )
     .await
@@ -75,6 +79,7 @@ pub async fn discover_config(host: &str, user: &str) -> Result<DiscoveredConfig>
     let storage_buffer_gib = ssh_command(
         host,
         user,
+        port,
         "grep 'from_gibibytes_u32' ~/omicron/nexus/src/app/mod.rs 2>/dev/null",
     )
     .await
@@ -254,8 +259,8 @@ pub fn parse_rust_constant(grep_output: &str) -> Option<u32> {
 }
 
 /// Run a command on a remote host via one-shot SSH.
-async fn ssh_command(host: &str, user: &str, cmd: &str) -> Result<String> {
-    let output = oneshot::one_shot(host, user, cmd, 30).await?;
+async fn ssh_command(host: &str, user: &str, port: u16, cmd: &str) -> Result<String> {
+    let output = oneshot::one_shot(host, user, port, cmd, 30).await?;
     if output.exit_code != 0 {
         return Err(eyre!("Command failed: {}", output.stderr.trim()));
     }

@@ -29,15 +29,17 @@ impl SerialConsole {
     pub async fn connect(
         proxmox_host: &str,
         proxmox_user: &str,
+        proxmox_port: u16,
         vmid: u32,
     ) -> Result<Self> {
-        Self::connect_with_log(proxmox_host, proxmox_user, vmid, None).await
+        Self::connect_with_log(proxmox_host, proxmox_user, proxmox_port, vmid, None).await
     }
 
     /// Open a serial console with logging to a file.
     pub async fn connect_with_log(
         proxmox_host: &str,
         proxmox_user: &str,
+        proxmox_port: u16,
         vmid: u32,
         log_path: Option<PathBuf>,
     ) -> Result<Self> {
@@ -51,7 +53,7 @@ impl SerialConsole {
 
         let mut handle = tokio::time::timeout(
             Duration::from_secs(10),
-            russh::client::connect(config, format!("{proxmox_host}:22"), handler),
+            russh::client::connect(config, format!("{proxmox_host}:{proxmox_port}"), handler),
         )
         .await
         .map_err(|_| eyre!("SSH to Proxmox host {destination} timed out"))?

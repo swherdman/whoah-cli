@@ -293,6 +293,7 @@ pub fn create_hypervisor(name: &str, htype: HypervisorType) -> Result<()> {
         credentials: HypervisorCredentials {
             host: String::new(),
             ssh_user: "root".to_string(),
+            ssh_port: None,
         },
         proxmox: match htype {
             HypervisorType::Proxmox => Some(ProxmoxHypervisorConfig {
@@ -468,6 +469,7 @@ iso_file = "helios.iso"
             credentials: super::HypervisorCredentials {
                 host: String::new(),
                 ssh_user: "root".to_string(),
+                ssh_port: None,
             },
             proxmox: Some(super::ProxmoxHypervisorConfig {
                 node: "PVE".to_string(),

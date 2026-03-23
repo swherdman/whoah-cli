@@ -35,12 +35,13 @@ pub struct DownloadProgress {
 pub async fn download_remote(
     host: &str,
     user: &str,
+    port: u16,
     url: &str,
     dest_path: &str,
     progress_tx: mpsc::Sender<DownloadProgress>,
 ) -> Result<()> {
     let config = Arc::new(russh::client::Config::default());
-    let addr = format!("{host}:22");
+    let addr = format!("{host}:{port}");
     let handler = SshClientHandler::new();
 
     let mut handle = tokio::time::timeout(

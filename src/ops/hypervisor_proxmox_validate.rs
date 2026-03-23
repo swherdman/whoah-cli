@@ -136,6 +136,7 @@ fn default_sockets() -> u32 { 1 }
 pub async fn validate_proxmox(
     host: &str,
     user: &str,
+    port: u16,
     config: &ProxmoxHypervisorConfig,
 ) -> ProxmoxValidation {
     let mut result = ProxmoxValidation {
@@ -152,7 +153,7 @@ pub async fn validate_proxmox(
     };
 
     // Query 1: List nodes
-    match ssh_command(host, user, "pvesh get /nodes --output-format json").await {
+    match ssh_command(host, user, port, "pvesh get /nodes --output-format json").await {
         Ok(output) => {
             match serde_json::from_str::<Vec<NodeInfo>>(&output) {
                 Ok(nodes) => {
@@ -189,7 +190,7 @@ pub async fn validate_proxmox(
     }
 
     // Query 2: List storage
-    match ssh_command(host, user, "pvesh get /storage --output-format json").await {
+    match ssh_command(host, user, port, "pvesh get /storage --output-format json").await {
         Ok(output) => {
             match serde_json::from_str::<Vec<StorageInfo>>(&output) {
                 Ok(storages) => {
@@ -261,7 +262,7 @@ pub async fn validate_proxmox(
             "pvesh get /nodes/{}/storage/{}/content --content iso --output-format json",
             node, config.iso_storage
         );
-        match ssh_command(host, user, &cmd).await {
+        match ssh_command(host, user, port, &cmd).await {
             Ok(output) => {
                 match serde_json::from_str::<Vec<IsoInfo>>(&output) {
                     Ok(isos) => {
@@ -303,8 +304,8 @@ pub async fn validate_proxmox(
 }
 
 /// Run a command on the Proxmox host via one-shot SSH.
-async fn ssh_command(host: &str, user: &str, cmd: &str) -> Result<String> {
-    let output = oneshot::one_shot(host, user, cmd, 30).await?;
+async fn ssh_command(host: &str, user: &str, port: u16, cmd: &str) -> Result<String> {
+    let output = oneshot::one_shot(host, user, port, cmd, 30).await?;
     if output.exit_code != 0 {
         return Err(eyre!("Command failed: {}", output.stderr.trim()));
     }
@@ -321,9 +322,9 @@ pub struct ProxmoxVm {
 }
 
 /// List all VMs on the Proxmox host.
-pub async fn list_vms(host: &str, user: &str, node: &str) -> Result<Vec<ProxmoxVm>> {
+pub async fn list_vms(host: &str, user: &str, port: u16, node: &str) -> Result<Vec<ProxmoxVm>> {
     let cmd = format!("pvesh get /nodes/{node}/qemu --output-format json");
-    let output = ssh_command(host, user, &cmd).await?;
+    let output = ssh_command(host, user, port, &cmd).await?;
     let vms: Vec<QemuVmInfo> = serde_json::from_str(&output)
         .map_err(|e| eyre!("Failed to parse VM list: {e}"))?;
     Ok(vms.iter().map(|v| ProxmoxVm { vmid: v.vmid, name: v.name.clone() }).collect())
@@ -333,11 +334,12 @@ pub async fn list_vms(host: &str, user: &str, node: &str) -> Result<Vec<ProxmoxV
 pub async fn query_vm_config(
     host: &str,
     user: &str,
+    port: u16,
     node: &str,
     vmid: u32,
 ) -> Result<crate::config::types::VmConfig> {
     let cmd = format!("pvesh get /nodes/{node}/qemu/{vmid}/config --output-format json");
-    let output = ssh_command(host, user, &cmd).await?;
+    let output = ssh_command(host, user, port, &cmd).await?;
     let config: QemuVmConfig = serde_json::from_str(&output)
         .map_err(|e| eyre!("Failed to parse VM config: {e}"))?;
 
@@ -427,6 +429,7 @@ pub use crate::ssh::download::DownloadProgress;
 pub async fn download_iso(
     host: &str,
     user: &str,
+    port: u16,
     iso_storage_path: &str,
     filename: &str,
     progress_tx: tokio::sync::mpsc::Sender<DownloadProgress>,
@@ -434,7 +437,7 @@ pub async fn download_iso(
     let url = format!("https://pkg.oxide.computer/install/latest/{filename}");
     let dest = format!("{iso_storage_path}/template/iso/{filename}");
 
-    crate::ssh::download::download_remote(host, user, &url, &dest, progress_tx).await
+    crate::ssh::download::download_remote(host, user, port, &url, &dest, progress_tx).await
 }
 
 #[cfg(test)]

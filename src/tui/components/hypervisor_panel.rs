@@ -92,6 +92,10 @@ impl HypervisorPanel {
         &self.config.credentials.ssh_user
     }
 
+    pub fn credentials_port(&self) -> u16 {
+        self.config.credentials.ssh_port()
+    }
+
     pub fn set_proxmox_checking(&mut self) {
         self.proxmox_validation = Some(ProxmoxValidation::checking());
         self.rebuild_lines();
@@ -107,9 +111,10 @@ impl HypervisorPanel {
         }
         let host = self.config.credentials.host.clone();
         let user = self.config.credentials.ssh_user.clone();
+        let port = self.config.credentials.ssh_port();
         self.ssh_status = SshProbeStatus::Checking;
         self.rebuild_lines();
-        Some(PanelAction::ProbeSsh { host, user })
+        Some(PanelAction::ProbeSsh { host, user, port })
     }
 
     // --- Navigation ---
@@ -228,7 +233,7 @@ impl HypervisorPanel {
         let path = field_path.as_deref().unwrap_or("");
 
         // Re-probe SSH if a credential field was edited
-        if path == "credentials.host" || path == "credentials.ssh_user" {
+        if path == "credentials.host" || path == "credentials.ssh_user" || path == "credentials.ssh_port" {
             return Ok(self.request_probe());
         }
 
@@ -239,6 +244,7 @@ impl HypervisorPanel {
             return Ok(Some(PanelAction::ValidateProxmox {
                 host: self.config.credentials.host.clone(),
                 user: self.config.credentials.ssh_user.clone(),
+                port: self.config.credentials.ssh_port(),
             }));
         }
 
@@ -291,6 +297,7 @@ impl HypervisorPanel {
         PanelEvent::Action(PanelAction::DownloadIso {
             host,
             user,
+            port: self.config.credentials.ssh_port(),
             iso_storage_path: storage_path,
             filename,
         })
@@ -347,6 +354,7 @@ impl HypervisorPanel {
                     PanelEvent::Action(PanelAction::ValidateProxmox {
                         host: self.config.credentials.host.clone(),
                         user: self.config.credentials.ssh_user.clone(),
+                        port: self.config.credentials.ssh_port(),
                     })
                 } else {
                     PanelEvent::Consumed
@@ -417,6 +425,16 @@ impl HypervisorPanel {
             "hypervisor",
             "credentials.ssh_user",
         );
+        {
+            let port_str = self.config.credentials.ssh_port.map(|p| p.to_string()).unwrap_or_else(|| "22".to_string());
+            push_editable(
+                &mut lines,
+                "ssh_port",
+                &port_str,
+                "hypervisor",
+                "credentials.ssh_port",
+            );
+        }
 
         // Type-specific section
         build_type_section(&mut lines, &self.config, self.proxmox_validation.as_ref());

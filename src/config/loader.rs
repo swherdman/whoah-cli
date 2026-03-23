@@ -163,6 +163,7 @@ pub fn resolve_proxmox_config(deployment: &DeploymentToml) -> Result<Option<Prox
     Ok(Some(ProxmoxConfig {
         host: hyp.credentials.host,
         ssh_user: hyp.credentials.ssh_user,
+        ssh_port: hyp.credentials.ssh_port,
         node: px_hyp.node,
         iso_storage: px_hyp.iso_storage,
         disk_storage: px_hyp.disk_storage,

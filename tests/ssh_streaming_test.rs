@@ -27,6 +27,7 @@ async fn test_command_after_streaming() {
         ssh_user: "swherdman".to_string(),
         role: whoah::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
 
     println!("Connecting...");
@@ -100,6 +101,7 @@ async fn test_logged_ssh_streaming_then_run() {
         ssh_user: "swherdman".to_string(),
         role: whoah::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
 
     println!("Connecting...");
@@ -161,6 +163,7 @@ async fn test_long_streaming_then_command() {
         ssh_user: "swherdman".to_string(),
         role: whoah::config::HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
 
     println!("Connecting...");

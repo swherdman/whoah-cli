@@ -43,6 +43,7 @@ pub enum AppEvent {
     SshProbeResult {
         host: String,
         user: String,
+        port: u16,
         status: SshProbeStatus,
     },
     /// Proxmox config validation completed
@@ -59,6 +60,7 @@ pub enum AppEvent {
         name: String,
         host: String,
         user: String,
+        port: u16,
         node: String,
         hypervisor_ref: String,
         import: bool,
@@ -69,6 +71,7 @@ pub enum AppEvent {
         name: String,
         host: String,
         user: String,
+        port: u16,
         hypervisor_ref: String,
         result: Result<crate::config::types::VmConfig, String>,
     },
@@ -77,6 +80,7 @@ pub enum AppEvent {
         name: String,
         host: String,
         user: String,
+        port: u16,
         hypervisor_ref: Option<String>,
         result: Result<crate::ops::discover::DiscoveredConfig, String>,
     },

@@ -116,6 +116,7 @@ impl DeploymentPanel {
             actions.push(PanelAction::ProbeSsh {
                 host: host.address.clone(),
                 user: host.ssh_user.clone(),
+                port: host.ssh_port(),
             });
         }
         if !actions.is_empty() {
@@ -251,20 +252,21 @@ impl DeploymentPanel {
 
         // Re-probe if a host credential field was edited (e.g. "hosts.helios01.address")
         if let Some(path) = field_path {
-            if path.starts_with("hosts.") && (path.ends_with(".address") || path.ends_with(".ssh_user")) {
+            if path.starts_with("hosts.") && (path.ends_with(".address") || path.ends_with(".ssh_user") || path.ends_with(".ssh_port")) {
                 // Extract host name from path like "hosts.helios01.address"
                 let parts: Vec<&str> = path.split('.').collect();
                 if parts.len() >= 2 {
                     let host_name = parts[1];
                     let probe_target = self.config.deployment.hosts.get(host_name)
                         .filter(|h| !h.address.is_empty())
-                        .map(|h| (h.address.clone(), h.ssh_user.clone()));
-                    if let Some((address, ssh_user)) = probe_target {
+                        .map(|h| (h.address.clone(), h.ssh_user.clone(), h.ssh_port()));
+                    if let Some((address, ssh_user, port)) = probe_target {
                         self.ssh_status.insert(host_name.to_string(), SshProbeStatus::Checking);
                         self.rebuild_detail_lines();
                         return Ok(Some(PanelAction::ProbeSsh {
                             host: address,
                             user: ssh_user,
+                            port,
                         }));
                     }
                 }
@@ -428,6 +430,23 @@ impl DeploymentPanel {
                 "deployment",
                 &format!("hosts.{name}.ssh_user"),
             );
+            if let Some(port) = host.ssh_port {
+                push_editable(
+                    &mut host_tab,
+                    "ssh_port",
+                    &port.to_string(),
+                    "deployment",
+                    &format!("hosts.{name}.ssh_port"),
+                );
+            } else {
+                push_editable(
+                    &mut host_tab,
+                    "ssh_port",
+                    "22",
+                    "deployment",
+                    &format!("hosts.{name}.ssh_port"),
+                );
+            }
             push_field(
                 &mut host_tab,
                 "role",

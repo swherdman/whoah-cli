@@ -40,6 +40,7 @@ async fn run_import(host_str: &str) -> Result<()> {
         ssh_user: ssh_user.clone(),
         role: HostRole::Combined,
         host_type: None,
+        ssh_port: None,
     };
     let host = SshHost::connect(&host_config).await?;
 
@@ -201,6 +202,7 @@ async fn run_wizard() -> Result<()> {
                         ssh_user,
                         role: HostRole::Combined,
                         host_type: None,
+                        ssh_port: None,
                     },
                 );
                 h
@@ -282,6 +284,7 @@ fn build_config_from_discovered(
                         ssh_user: ssh_user.to_string(),
                         role: HostRole::Combined,
                         host_type: None,
+                        ssh_port: None,
                     },
                 );
                 h

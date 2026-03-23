@@ -47,6 +47,15 @@ pub struct HostConfig {
     pub role: HostRole,
     #[serde(default)]
     pub host_type: Option<HostType>,
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
+}
+
+impl HostConfig {
+    /// SSH port, defaulting to 22 when not set.
+    pub fn ssh_port(&self) -> u16 {
+        self.ssh_port.unwrap_or(22)
+    }
 }
 
 fn default_role() -> HostRole {
@@ -170,6 +179,8 @@ pub struct ProxmoxConfig {
     pub host: String,
     #[serde(default = "default_proxmox_ssh_user")]
     pub ssh_user: String,
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
     #[serde(default = "default_proxmox_node")]
     pub node: String,
     #[serde(default = "default_iso_storage")]
@@ -180,6 +191,13 @@ pub struct ProxmoxConfig {
     pub iso_file: String,
     #[serde(default)]
     pub vm: ProxmoxVmConfig,
+}
+
+impl ProxmoxConfig {
+    /// SSH port, defaulting to 22 when not set.
+    pub fn ssh_port(&self) -> u16 {
+        self.ssh_port.unwrap_or(22)
+    }
 }
 
 fn default_proxmox_ssh_user() -> String {
@@ -304,6 +322,15 @@ pub struct HypervisorMeta {
 pub struct HypervisorCredentials {
     pub host: String,
     pub ssh_user: String,
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
+}
+
+impl HypervisorCredentials {
+    /// SSH port, defaulting to 22 when not set.
+    pub fn ssh_port(&self) -> u16 {
+        self.ssh_port.unwrap_or(22)
+    }
 }
 
 /// Type-specific Proxmox hypervisor settings (shared across VMs on this host)
@@ -871,5 +898,98 @@ disk_gb = 256
         assert_eq!(vm.cores, 2);
         let host = config.hosts.get("helios01").unwrap();
         assert_eq!(host.host_type, Some(HostType::Vm));
+    }
+
+    #[test]
+    fn test_host_config_ssh_port_default() {
+        let toml_str = r#"
+address = "192.168.2.209"
+ssh_user = "swherdman"
+role = "combined"
+"#;
+        let config: HostConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ssh_port, None);
+        assert_eq!(config.ssh_port(), 22);
+    }
+
+    #[test]
+    fn test_host_config_ssh_port_custom() {
+        let toml_str = r#"
+address = "localhost"
+ssh_user = "swherdman"
+role = "combined"
+ssh_port = 2222
+"#;
+        let config: HostConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ssh_port, Some(2222));
+        assert_eq!(config.ssh_port(), 2222);
+    }
+
+    #[test]
+    fn test_host_config_ssh_port_roundtrip() {
+        let config = HostConfig {
+            address: "localhost".to_string(),
+            ssh_user: "user".to_string(),
+            role: HostRole::Combined,
+            host_type: None,
+            ssh_port: Some(2222),
+        };
+        let s = toml::to_string_pretty(&config).unwrap();
+        assert!(s.contains("ssh_port = 2222"));
+        let parsed: HostConfig = toml::from_str(&s).unwrap();
+        assert_eq!(parsed.ssh_port(), 2222);
+    }
+
+    #[test]
+    fn test_host_config_ssh_port_omitted_roundtrip() {
+        let config = HostConfig {
+            address: "192.168.2.209".to_string(),
+            ssh_user: "user".to_string(),
+            role: HostRole::Combined,
+            host_type: None,
+            ssh_port: None,
+        };
+        let s = toml::to_string_pretty(&config).unwrap();
+        assert!(!s.contains("ssh_port"));
+        let parsed: HostConfig = toml::from_str(&s).unwrap();
+        assert_eq!(parsed.ssh_port(), 22);
+    }
+
+    #[test]
+    fn test_hypervisor_credentials_ssh_port() {
+        let toml_str = r#"
+[hypervisor]
+name = "proxmox-lab"
+type = "proxmox"
+
+[credentials]
+host = "192.168.2.5"
+ssh_user = "root"
+ssh_port = 2222
+
+[proxmox]
+node = "PVE"
+"#;
+        let config: HypervisorConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.credentials.ssh_port(), 2222);
+    }
+
+    #[test]
+    fn test_hypervisor_credentials_ssh_port_default() {
+        let toml_str = r#"
+[hypervisor]
+name = "proxmox-lab"
+type = "proxmox"
+
+[credentials]
+host = "192.168.2.5"
+ssh_user = "root"
+
+[proxmox]
+node = "PVE"
+"#;
+        let config: HypervisorConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.credentials.ssh_port, None);
+        assert_eq!(config.credentials.ssh_port(), 22);
     }
 }

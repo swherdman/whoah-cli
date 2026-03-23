@@ -22,11 +22,12 @@ use super::CommandOutput;
 pub async fn one_shot(
     host: &str,
     user: &str,
+    port: u16,
     cmd: &str,
     timeout_secs: u64,
 ) -> Result<CommandOutput> {
     let config = Arc::new(russh::client::Config::default());
-    let addr = format!("{host}:22");
+    let addr = format!("{host}:{port}");
     let handler = SshClientHandler::new();
 
     let mut handle = tokio::time::timeout(

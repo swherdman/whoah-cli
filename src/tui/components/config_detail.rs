@@ -41,13 +41,14 @@ pub enum PanelAction {
     /// Request async git ref fetch.
     FetchGitRefs { repo_url: String },
     /// Request SSH credential probe.
-    ProbeSsh { host: String, user: String },
+    ProbeSsh { host: String, user: String, port: u16 },
     /// Request Proxmox config validation.
-    ValidateProxmox { host: String, user: String },
+    ValidateProxmox { host: String, user: String, port: u16 },
     /// Request ISO download to Proxmox host.
     DownloadIso {
         host: String,
         user: String,
+        port: u16,
         iso_storage_path: String,
         filename: String,
     },
