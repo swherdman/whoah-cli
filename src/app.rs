@@ -127,6 +127,9 @@ impl App {
         self.app_event_tx = Some(tui.event_tx());
         tracing::info!("Starting whoah dashboard...");
 
+        // Check prerequisites (docker, gh) in background
+        self.spawn_prereq_checks();
+
         if !self.demo {
             // Connect to host
             self.connect().await;
@@ -695,6 +698,10 @@ impl App {
                     crate::tui::components::config_detail::PanelData::ProxmoxValidation(validation.clone()),
                 );
             }
+            AppEvent::PrereqsChecked(results) => {
+                tracing::debug!("Prerequisites: docker={:?} gh={:?}", results.docker, results.gh);
+                self.config_view.set_prereqs(results.clone());
+            }
         }
     }
 
@@ -979,6 +986,14 @@ impl App {
                 }));
             });
         }
+    }
+
+    fn spawn_prereq_checks(&mut self) {
+        let Some(tx) = self.app_event_tx.clone() else { return };
+        tokio::spawn(async move {
+            let results = crate::ops::prereqs::check_all().await;
+            let _ = tx.send(Event::App(AppEvent::PrereqsChecked(results)));
+        });
     }
 
     fn spawn_ssh_probe(&mut self, host: &str, user: &str) {

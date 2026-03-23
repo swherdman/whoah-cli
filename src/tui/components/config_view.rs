@@ -126,6 +126,9 @@ pub struct ConfigView {
     // Activation state — persists across panel switches
     activated_name: Option<String>,
     activated_config: Option<DeploymentConfig>,
+
+    // Prerequisite check results
+    prereqs: crate::ops::prereqs::PrereqResults,
 }
 
 impl ConfigView {
@@ -149,6 +152,7 @@ impl ConfigView {
             create_flow: CreateFlow::Inactive,
             activated_name: Some(initial_deployment.to_string()),
             activated_config: None,
+            prereqs: crate::ops::prereqs::PrereqResults::default(),
         };
 
         if !view.deployments.is_empty() {
@@ -364,6 +368,11 @@ impl ConfigView {
                 self.load_selected_deployment();
             }
         }
+    }
+
+    /// Update prerequisite check results.
+    pub fn set_prereqs(&mut self, results: crate::ops::prereqs::PrereqResults) {
+        self.prereqs = results;
     }
 
     /// Whether the active panel is capturing input (for status bar display).
@@ -1313,11 +1322,12 @@ impl ConfigView {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // Always show the hypervisors section (we have the "Add" entry at minimum)
+        // Layout: deployments, HYPERVISORS header, hypervisors, PREREQUISITES section
         let sections = Layout::vertical([
             Constraint::Min(4),
             Constraint::Length(1),
             Constraint::Min(3),
+            Constraint::Length(4), // PREREQUISITES header + docker + gh
         ])
         .split(inner);
 
@@ -1397,6 +1407,41 @@ impl ConfigView {
         } else {
             frame.render_widget(hyp_list, sections[2]);
         }
+
+        // Prerequisites section
+        self.render_prereqs(frame, sections[3], p);
+    }
+
+    fn render_prereqs(&self, frame: &mut Frame, area: Rect, p: &Palette) {
+        use crate::ops::prereqs::PrereqStatus;
+
+        if area.height < 3 {
+            return;
+        }
+
+        let chunks = Layout::vertical([
+            Constraint::Length(1), // header
+            Constraint::Length(1), // docker
+            Constraint::Length(1), // gh
+        ])
+        .split(area);
+
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                " PREREQUISITES",
+                Style::default()
+                    .fg(p.text_bright)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .style(Style::default().bg(p.bg_panel)),
+            chunks[0],
+        );
+
+        let docker_line = prereq_line("docker", self.prereqs.docker, p);
+        frame.render_widget(Paragraph::new(docker_line), chunks[1]);
+
+        let gh_line = prereq_line("gh", self.prereqs.gh, p);
+        frame.render_widget(Paragraph::new(gh_line), chunks[2]);
     }
 
     fn render_right_panel(&self, frame: &mut Frame, area: Rect, p: &Palette) {
@@ -1491,6 +1536,30 @@ fn default_build_config() -> crate::config::types::BuildToml {
         },
         propolis: None,
         tuning: crate::config::types::TuningConfig::default(),
+    }
+}
+
+fn prereq_line<'a>(name: &str, status: crate::ops::prereqs::PrereqStatus, p: &Palette) -> Line<'a> {
+    use crate::ops::prereqs::PrereqStatus;
+
+    let (dot, color, label) = match status {
+        PrereqStatus::Unknown => ("●", p.text_disabled, "checking..."),
+        PrereqStatus::Ok => ("●", p.green_primary, ""),
+        PrereqStatus::Degraded => ("●", p.yellow_warn, "not ready"),
+        PrereqStatus::Missing => ("●", p.red_error, "not found"),
+    };
+
+    if label.is_empty() {
+        Line::from(vec![
+            Span::styled(format!("   {name} "), Style::default().fg(p.text_tertiary)),
+            Span::styled(dot, Style::default().fg(color)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(format!("   {name} "), Style::default().fg(p.text_tertiary)),
+            Span::styled(dot, Style::default().fg(color)),
+            Span::styled(format!(" {label}"), Style::default().fg(color)),
+        ])
     }
 }
 

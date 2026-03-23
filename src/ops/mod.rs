@@ -6,6 +6,7 @@ pub mod import;
 pub mod nexus;
 pub mod pipeline;
 pub mod pkg_cache;
+pub mod prereqs;
 pub mod proxmox;
 pub mod recover;
 pub mod serial;

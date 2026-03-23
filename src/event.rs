@@ -47,6 +47,8 @@ pub enum AppEvent {
     },
     /// Proxmox config validation completed
     ProxmoxValidated(ProxmoxValidation),
+    /// Prerequisite checks completed
+    PrereqsChecked(crate::ops::prereqs::PrereqResults),
     /// ISO download progress update
     DownloadProgress {
         filename: String,
