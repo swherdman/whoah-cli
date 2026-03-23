@@ -43,28 +43,32 @@ cd whoah-cli
 cargo build --release
 ```
 
-### Initialize a deployment
-
-```bash
-./target/release/whoah init
-```
-
-This creates a deployment configuration at `~/.whoah/deployments/<name>/` with three files:
-- `deployment.toml` — host, network, hypervisor, and Nexus API settings
-- `build.toml` — Omicron/propolis build configuration, overrides, and tuning
-- `monitoring.toml` — health thresholds and polling intervals
-
-Shared hypervisor definitions live at `~/.whoah/shared/hypervisors/<name>.toml` and are referenced by deployments.
-
-### Launch the TUI
+### Launch
 
 ```bash
 ./target/release/whoah
 ```
 
-This opens the TUI dashboard. From here you can review and edit your configuration on the Config tab (`1`), then switch to the Build tab (`2`) and press `b` to start the deploy pipeline. The tool handles everything from VM creation through a running Oxide control plane. Use the Monitor tab (`3`) to watch your deployment once it's running.
+This opens the TUI dashboard. Use the Config tab (`1`) to create and configure deployments — add hypervisors, set up hosts, network ranges, and build settings all from within the TUI. Switch to the Build tab (`2`) and press `b` to start the deploy pipeline. The tool handles everything from VM creation through a running Oxide control plane. Use the Monitor tab (`3`) to watch your deployment once it's running.
 
 ## Configuration
+
+All configuration is managed through the TUI's Config tab. Files are stored under `~/.whoah/`:
+
+```
+~/.whoah/
+├── config.toml                          # Global settings (default deployment)
+├── deployments/
+│   └── <name>/
+│       ├── deployment.toml              # Host, network, hypervisor, Nexus API
+│       ├── build.toml                   # Omicron/propolis build config, overrides, tuning
+│       └── monitoring.toml              # Health thresholds, polling intervals
+└── shared/
+    └── hypervisors/
+        └── <name>.toml                  # Shared hypervisor definitions (referenced by deployments)
+```
+
+Deployments can be created, edited, and deleted from the Config tab. Hypervisor configs are shared across deployments — define once, reference by name.
 
 ### deployment.toml
 
@@ -187,7 +191,7 @@ iso_file = "helios-install-vga.iso"
 | `1` | Config | Tabbed configuration browser (Host, Network, Build, Nexus, Monitoring) |
 | `2` | Build | Pipeline progress with streaming output |
 | `3` | Monitor | Dashboard with zone, disk, and service status |
-| `d` | Debug | Live SSH sessions, mux masters, Docker containers |
+| `d` | Debug | Live SSH sessions, Docker containers |
 
 ## Architecture
 
