@@ -32,6 +32,8 @@ pub struct BuildView {
     selected_step: usize,
     /// Total step count from last render.
     total_steps: usize,
+    /// True when user has manually scrolled the step list — disables auto-advance.
+    user_scrolled: bool,
 }
 
 impl BuildView {
@@ -46,6 +48,7 @@ impl BuildView {
             log_visible_height: 0,
             selected_step: 0,
             total_steps: 0,
+            user_scrolled: false,
         }
     }
 
@@ -54,7 +57,8 @@ impl BuildView {
         self.focus = match self.focus {
             BuildFocus::StepList => BuildFocus::LogPanel,
             BuildFocus::LogPanel => {
-                // Returning to step list: re-enable auto-scroll by snapping to bottom
+                // Returning to step list: re-enable auto-advance and auto-scroll
+                self.user_scrolled = false;
                 self.log_scroll =
                     self.total_log_lines.saturating_sub(self.log_visible_height) as u16;
                 BuildFocus::StepList
@@ -82,6 +86,7 @@ impl BuildView {
     pub fn select_next_step(&mut self) {
         if self.total_steps > 0 && self.selected_step < self.total_steps - 1 {
             self.selected_step += 1;
+            self.user_scrolled = true;
             // Reset log scroll when step selection changes
             self.log_scroll = 0;
             self.prev_log_len = 0;
@@ -92,6 +97,7 @@ impl BuildView {
     pub fn select_prev_step(&mut self) {
         if self.selected_step > 0 {
             self.selected_step -= 1;
+            self.user_scrolled = true;
             self.log_scroll = 0;
             self.prev_log_len = 0;
         }
@@ -183,8 +189,9 @@ impl BuildView {
         // Count total steps for cursor clamping
         self.total_steps = pipeline.phases.iter().map(|ph| ph.steps.len()).sum();
 
-        // Auto-advance selection to the currently running step
-        if self.focus == BuildFocus::StepList {
+        // Auto-advance selection to the currently running step,
+        // unless the user has manually scrolled.
+        if !self.user_scrolled {
             let mut idx = 0usize;
             for phase in &pipeline.phases {
                 for step in &phase.steps {
