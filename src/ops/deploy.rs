@@ -735,7 +735,7 @@ async fn run_os_setup(
             &helios, log_path.clone(), tx, "os-update",
         ).await?;
 
-        ssh.detail("Running pkg update...").await;
+        ssh.detail("Running pkg update (solver can take 2-5 min on first run)...").await;
         // pkg update: exit 0 = updated (reboot needed), exit 4 = nothing to do
         let _exit_code = ssh.run_streaming("pfexec pkg update -v 2>&1; echo \"PKG_EXIT=$?\"").await?;
 
