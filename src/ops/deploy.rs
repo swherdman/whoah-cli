@@ -1472,7 +1472,7 @@ print('Updated vdevs to {vdev_count}')
 
     // Integrated polling loop: poll zone status and trigger DNS/API checks
     // as soon as the relevant zones come up
-    for attempt in 0..120 {
+    for attempt in 0..360 {
         let zone_output = ssh.run("zoneadm list -cp").await?;
         let zone_lines: Vec<&str> = zone_output.stdout.lines()
             .filter(|l| l.contains(":running:"))
@@ -1538,7 +1538,7 @@ print('Updated vdevs to {vdev_count}')
             break;
         }
 
-        if attempt == 119 {
+        if attempt == 359 {
             let mut warnings = vec![];
             if running < expected_running {
                 warnings.push(format!("only {running}/{expected_running} zones"));

@@ -59,7 +59,7 @@ impl Tui {
         let cancel = self.cancel.clone();
         let event_tx = self.event_tx.clone();
         let tick_rate = Duration::from_millis(250);
-        let render_rate = Duration::from_millis(33); // ~30fps
+        let render_rate = Duration::from_millis(100); // ~10fps — sufficient for dashboard UI
 
         self.task = Some(tokio::spawn(async move {
             let mut event_stream = EventStream::new();
