@@ -1064,7 +1064,7 @@ impl ConfigView {
                 nexus: crate::config::types::NexusConfig::default(),
                 hypervisor,
             },
-            build: crate::config::types::BuildToml::default(),
+            build: default_build_config(),
             monitoring: crate::config::types::MonitoringToml::default(),
         };
 
@@ -1135,7 +1135,7 @@ impl ConfigView {
                     vm: Some(vm),
                 }),
             },
-            build: crate::config::types::BuildToml::default(),
+            build: default_build_config(),
             monitoring: crate::config::types::MonitoringToml::default(),
         };
 
@@ -1263,7 +1263,17 @@ impl ConfigView {
                     rust_toolchain: None,
                     overrides: discovered.overrides.clone(),
                 },
-                propolis: None,
+                // TODO: Support multiple propolis patches in the future.
+                // Currently hardcoded to the string-io-emulation patch.
+                propolis: Some(crate::config::types::PropolisBuildConfig {
+                    repo_path: "~/propolis".to_string(),
+                    patched: Some(true),
+                    patch_type: Some("string-io-emulation".to_string()),
+                    source: Some(crate::config::types::PropolisSource::GithubRelease),
+                    repo_url: Some("https://github.com/swherdman/propolis".to_string()),
+                    git_ref: None,
+                    local_binary: None,
+                }),
                 tuning: crate::config::types::TuningConfig::default(),
             },
             monitoring: crate::config::types::MonitoringToml::default(),
@@ -1460,6 +1470,27 @@ impl ConfigView {
 impl Component for ConfigView {
     fn render(&self, frame: &mut Frame, area: Rect) {
         self.render_impl(frame, area);
+    }
+}
+
+/// Default build config for new deployments — sets lab-appropriate overrides
+/// that prevent Omicron from using production-sized defaults.
+fn default_build_config() -> crate::config::types::BuildToml {
+    crate::config::types::BuildToml {
+        omicron: crate::config::types::OmicronBuildConfig {
+            repo_path: "~/omicron".to_string(),
+            repo_url: None,
+            git_ref: None,
+            rust_toolchain: None,
+            overrides: crate::config::types::OmicronOverrides {
+                cockroachdb_redundancy: Some(3),
+                control_plane_storage_buffer_gib: Some(5),
+                vdev_count: Some(3),
+                vdev_size_bytes: Some(42949672960), // 40 GB
+            },
+        },
+        propolis: None,
+        tuning: crate::config::types::TuningConfig::default(),
     }
 }
 
