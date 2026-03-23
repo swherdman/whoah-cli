@@ -1,27 +1,33 @@
-use std::path::PathBuf;
+//! SSH session using russh.
+//!
+//! Implements the RemoteHost trait using russh's pure-Rust SSH2 protocol.
+//! Each connection is a single TCP socket with native SSH2 channel
+//! multiplexing — no ControlMaster, no mux sockets, no external processes.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use color_eyre::{eyre::eyre, Result};
-use openssh::{KnownHosts, Session, SessionBuilder, Stdio};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use russh::client::Handle;
+use russh::ChannelMsg;
+use russh::Disconnect;
 use tokio::sync::mpsc;
 
 use crate::config::HostConfig;
 
+use super::auth::authenticate;
+use super::handler::SshClientHandler;
 use super::{CommandOutput, RemoteHost};
 
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct SshHost {
-    session: Option<Arc<Session>>,
+    handle: Arc<Handle<SshClientHandler>>,
     host: String,
     destination: String,
     id: String,
-    ctl_path: PathBuf,
-    log_path: PathBuf,
     command_count: AtomicU64,
 }
 
@@ -42,58 +48,41 @@ impl SshHost {
 
         tracing::info!(id = %id, dest = %destination, "SSH connecting...");
 
-        // ServerAliveInterval is deliberately disabled (0).
-        // With -N (no command) on the master, keepalives are checked against
-        // the master's own idle connection. If the server is under heavy I/O
-        // (e.g., pkg install downloading 600MB), it may not respond to keepalives
-        // within ServerAliveInterval × ServerAliveCountMax (default 30s × 3 = 90s),
-        // causing the master to kill itself and all child channels.
-        // Our 120s execute timeout provides the safety net instead.
-        let session = SessionBuilder::default()
-            .known_hosts_check(KnownHosts::Accept)
-            .connect_timeout(Duration::from_secs(10))
-            .connect_mux(&destination)
+        let russh_config = Arc::new(russh::client::Config {
+            // Detect dead connections — without keepalives, a TCP connection
+            // killed by an intermediate firewall goes unnoticed indefinitely.
+            keepalive_interval: Some(Duration::from_secs(30)),
+            keepalive_max: 6, // 30s * 6 = 180s before declaring dead
+            ..Default::default()
+        });
+
+        let addr = format!("{}:22", config.address);
+        let handler = SshClientHandler::new();
+
+        let mut handle = tokio::time::timeout(
+            Duration::from_secs(10),
+            russh::client::connect(russh_config, &addr, handler),
+        )
+        .await
+        .map_err(|_| eyre!("SSH connection to {destination} timed out after 10s"))?
+        .map_err(|e| eyre!("SSH connection to {destination} failed: {e}"))?;
+
+        authenticate(&mut handle, &config.ssh_user)
             .await
-            .map_err(|e| eyre!("SSH connection to {destination} failed: {e}"))?;
+            .map_err(|e| eyre!("SSH auth to {destination} failed: {e}"))?;
 
-        let ctl_path = session.control_socket().to_path_buf();
-        let log_path = ctl_path
-            .parent()
-            .map(|p| p.join("log"))
-            .unwrap_or_default();
+        let handle = Arc::new(handle);
 
-        // Log the host key fingerprint
-        let hostkey = tokio::process::Command::new("ssh-keygen")
-            .args(["-l", "-F", &config.address])
-            .output()
-            .await
-            .ok()
-            .and_then(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.lines()
-                    .find(|l| l.contains("SHA256:"))
-                    .map(|l| l.trim().to_string())
-            });
-        let key_info = hostkey.as_deref().unwrap_or("unknown");
-
-        tracing::info!(
-            id = %id,
-            dest = %destination,
-            ctl = %ctl_path.display(),
-            host_key = %key_info,
-            "SSH connected"
-        );
+        tracing::info!(id = %id, dest = %destination, "SSH connected");
 
         // Register in the global registry
-        super::registry::register(&id, &destination, ctl_path.clone(), log_path.clone());
+        super::registry::register(&id, &destination);
 
         Ok(Self {
-            session: Some(Arc::new(session)),
+            handle,
             host: config.address.clone(),
             destination,
             id,
-            ctl_path,
-            log_path,
             command_count: AtomicU64::new(0),
         })
     }
@@ -103,59 +92,32 @@ impl SshHost {
         super::registry::set_label(&self.id, label);
     }
 
-    /// Check if the mux control socket still exists on disk.
-    pub fn socket_exists(&self) -> bool {
-        self.ctl_path.exists()
+    /// Check if the SSH connection is still alive.
+    pub fn is_connected(&self) -> bool {
+        !self.handle.is_closed()
     }
 
-    /// Read the SSH mux master's log file.
-    pub fn master_log_content(&self) -> Option<String> {
-        std::fs::read_to_string(&self.log_path).ok()
-    }
-
-    /// Pre-command health check. Returns an error if the mux master is dead.
-    fn check_health(&self, cmd: &str) -> Result<()> {
-        if !self.socket_exists() {
-            let log = self.master_log_content().unwrap_or_else(|| "<no log>".to_string());
-            tracing::error!(
-                id = %self.id,
-                host = %self.host,
-                ctl = %self.ctl_path.display(),
-                "Mux socket MISSING before command: {cmd}"
-            );
-            tracing::error!(id = %self.id, "Master log:\n{log}");
-            return Err(eyre!(
-                "SSH mux master for {} died (socket {} missing).\nMaster log:\n{}",
-                self.destination,
-                self.ctl_path.display(),
-                log
-            ));
-        }
-        Ok(())
-    }
-
-    fn get_session(&self) -> Result<&Arc<Session>> {
-        self.session
-            .as_ref()
-            .ok_or_else(|| eyre!("SSH session to {} already closed", self.host))
-    }
-
-    /// Explicitly close the SSH session and kill the mux master.
-    pub async fn close(mut self) -> Result<()> {
+    /// Explicitly close the SSH session.
+    pub async fn close(&self) -> Result<()> {
         let id = self.id.clone();
         let dest = self.destination.clone();
-        super::registry::unregister(&id);
 
-        if let Some(session) = self.session.take() {
-            let session = Arc::try_unwrap(session)
-                .map_err(|_| eyre!("Cannot close session: outstanding references exist"))?;
-            session
-                .close()
-                .await
-                .map_err(|e| eyre!("Failed to close SSH session to {}: {e}", self.host))?;
-            tracing::info!(id = %id, dest = %dest, "SSH session closed");
-        }
+        let _ = self
+            .handle
+            .disconnect(Disconnect::ByApplication, "closing", "en")
+            .await;
+
+        super::registry::unregister(&id);
+        tracing::info!(id = %id, dest = %dest, "SSH session closed");
         Ok(())
+    }
+}
+
+impl Drop for SshHost {
+    fn drop(&mut self) {
+        // Safety net — unregister is idempotent, so this is harmless
+        // if close() was already called.
+        super::registry::unregister(&self.id);
     }
 }
 
@@ -170,64 +132,76 @@ impl RemoteHost for SshHost {
             id = %self.id,
             host = %self.host,
             cmd_num = count,
-            socket_exists = self.socket_exists(),
             cmd = %cmd_short,
             "execute: starting"
         );
 
-        // Fail fast if mux master is dead
-        self.check_health(cmd)?;
+        let start = std::time::Instant::now();
 
-        let start = Instant::now();
-        let session = self.get_session()?.clone();
-        let cmd_owned = cmd.to_string();
-        let output = tokio::time::timeout(
-            Duration::from_secs(120),
-            async {
-                session
-                    .arc_command("sh")
-                    .arg("-c")
-                    .arg(&cmd_owned)
-                    .output()
-                    .await
-            },
-        )
-        .await
-        .map_err(|_| {
-            let socket_exists = self.socket_exists();
-            let log = self.master_log_content().unwrap_or_else(|| "<no log file>".to_string());
+        let mut channel = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| eyre!("Failed to open SSH channel on {}: {e}", self.host))?;
+
+        channel
+            .exec(true, cmd.as_bytes())
+            .await
+            .map_err(|e| eyre!("Failed to exec on {}: {e}", self.host))?;
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_code: Option<u32> = None;
+
+        let result = tokio::time::timeout(Duration::from_secs(120), async {
+            loop {
+                match channel.wait().await {
+                    Some(ChannelMsg::Data { data }) => {
+                        stdout.extend_from_slice(&data);
+                    }
+                    Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                        stderr.extend_from_slice(&data);
+                    }
+                    Some(ChannelMsg::ExitStatus { exit_status }) => {
+                        exit_code = Some(exit_status);
+                    }
+                    Some(ChannelMsg::Eof) => {}
+                    Some(ChannelMsg::Close) => break,
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+        })
+        .await;
+
+        if result.is_err() {
             tracing::error!(
                 id = %self.id,
                 host = %self.host,
-                socket_exists = socket_exists,
-                "execute TIMED OUT after 120s! Master log:\n{log}"
+                "execute TIMED OUT after 120s"
             );
-            eyre!(
-                "SSH command timed out after 120s on {}. Socket exists: {}.\nMaster log:\n{}",
-                self.destination, socket_exists, log
-            )
-        })?
-        .map_err(|e| eyre!("Command failed on {}: {e}", self.host))?;
+            return Err(eyre!(
+                "SSH command timed out after 120s on {}",
+                self.destination
+            ));
+        }
 
-        let exit_code = output.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit = exit_code.map(|c| c as i32).unwrap_or(-1);
         let elapsed = start.elapsed();
 
         tracing::debug!(
             id = %self.id,
             host = %self.host,
             cmd_num = count,
-            exit_code = exit_code,
+            exit_code = exit,
             elapsed_ms = elapsed.as_millis() as u64,
-            socket_exists = self.socket_exists(),
             "execute: completed"
         );
 
         Ok(CommandOutput {
-            stdout,
-            stderr,
-            exit_code,
+            stdout: String::from_utf8_lossy(&stdout).to_string(),
+            stderr: String::from_utf8_lossy(&stderr).to_string(),
+            exit_code: exit,
         })
     }
 
@@ -244,99 +218,83 @@ impl RemoteHost for SshHost {
             id = %self.id,
             host = %self.host,
             cmd_num = count,
-            socket_exists = self.socket_exists(),
             cmd = %cmd_short,
             "execute_streaming: starting"
         );
 
-        // Fail fast if mux master is dead
-        self.check_health(cmd)?;
+        let start = std::time::Instant::now();
 
-        let start = Instant::now();
-        let mut child = self
-            .get_session()?
-            .clone()
-            .arc_command("sh")
-            .arg("-c")
-            .arg(cmd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+        let mut channel = self
+            .handle
+            .channel_open_session()
             .await
-            .map_err(|e| eyre!("Failed to spawn command on {}: {e}", self.host))?;
+            .map_err(|e| eyre!("Failed to open SSH channel on {}: {e}", self.host))?;
 
-        tracing::info!(id = %self.id, "execute_streaming: child spawned");
+        channel
+            .exec(true, cmd.as_bytes())
+            .await
+            .map_err(|e| eyre!("Failed to exec on {}: {e}", self.host))?;
 
-        let stdout = child.stdout().take();
-        let stderr = child.stderr().take();
+        tracing::info!(id = %self.id, "execute_streaming: channel opened");
 
-        let stdout_handle = if let Some(stdout) = stdout {
-            let tx_clone = tx.clone();
-            Some(tokio::spawn(async move {
-                let reader = BufReader::new(stdout);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if tx_clone.send(line).await.is_err() {
-                        break;
+        let mut exit_code: Option<u32> = None;
+        let mut partial_line = String::new();
+
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => {
+                    let chunk = String::from_utf8_lossy(&data);
+                    partial_line.push_str(&chunk);
+
+                    while let Some(pos) = partial_line.find('\n') {
+                        let line = partial_line[..pos].to_string();
+                        partial_line = partial_line[pos + 1..].to_string();
+                        if tx.send(line).await.is_err() {
+                            break;
+                        }
                     }
                 }
-            }))
-        } else {
-            None
-        };
+                Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                    // Stream stderr too (same as current behavior)
+                    let chunk = String::from_utf8_lossy(&data);
+                    partial_line.push_str(&chunk);
 
-        let stderr_handle = if let Some(stderr) = stderr {
-            let tx_clone = tx.clone();
-            Some(tokio::spawn(async move {
-                let reader = BufReader::new(stderr);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if tx_clone.send(line).await.is_err() {
-                        break;
+                    while let Some(pos) = partial_line.find('\n') {
+                        let line = partial_line[..pos].to_string();
+                        partial_line = partial_line[pos + 1..].to_string();
+                        if tx.send(line).await.is_err() {
+                            break;
+                        }
                     }
                 }
-            }))
-        } else {
-            None
-        };
-
-        // Drop our sender so the channel can close once the reader tasks finish
-        drop(tx);
-
-        tracing::info!(id = %self.id, "execute_streaming: waiting for child...");
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| eyre!("Failed waiting for command on {}: {e}", self.host))?;
-
-        tracing::info!(
-            id = %self.id,
-            socket_exists = self.socket_exists(),
-            "execute_streaming: child exited, awaiting readers..."
-        );
-
-        if let Some(h) = stdout_handle {
-            let _ = h.await;
-        }
-        if let Some(h) = stderr_handle {
-            let _ = h.await;
+                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = Some(exit_status);
+                }
+                Some(ChannelMsg::Eof) => {}
+                Some(ChannelMsg::Close) => break,
+                Some(_) => {}
+                None => break,
+            }
         }
 
-        let exit_code = status.code().unwrap_or(-1);
+        // Flush any remaining partial line
+        if !partial_line.is_empty() {
+            let _ = tx.send(partial_line).await;
+        }
+
+        let exit = exit_code.map(|c| c as i32).unwrap_or(-1);
         let elapsed = start.elapsed();
 
         tracing::info!(
             id = %self.id,
             host = %self.host,
             cmd_num = count,
-            exit_code = exit_code,
+            exit_code = exit,
             elapsed_ms = elapsed.as_millis() as u64,
-            socket_exists = self.socket_exists(),
-            "execute_streaming: fully complete"
+            "execute_streaming: completed"
         );
 
-        Ok(exit_code)
+        Ok(exit)
     }
 
     fn hostname(&self) -> &str {
@@ -344,10 +302,17 @@ impl RemoteHost for SshHost {
     }
 
     async fn check(&self) -> Result<()> {
-        self.get_session()?
-            .check()
+        if self.handle.is_closed() {
+            return Err(eyre!("SSH connection to {} is closed", self.host));
+        }
+
+        // Open and immediately close a channel to verify the connection works
+        let channel = self
+            .handle
+            .channel_open_session()
             .await
             .map_err(|e| eyre!("SSH connection check failed for {}: {e}", self.host))?;
+        let _ = channel.close().await;
         Ok(())
     }
 }

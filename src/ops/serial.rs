@@ -8,17 +8,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use color_eyre::{eyre::eyre, Result};
-use openssh::{KnownHosts, Session, SessionBuilder, Stdio};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::sync::mpsc;
+
+use crate::ssh::auth::authenticate;
+use crate::ssh::handler::SshClientHandler;
 
 /// A live serial console connection to a Proxmox VM.
 pub struct SerialConsole {
-    stdin: openssh::ChildStdin,
+    writer: WriteHalf<russh::ChannelStream<russh::client::Msg>>,
     lines_rx: mpsc::UnboundedReceiver<String>,
     log_file: Option<tokio::fs::File>,
-    _session: Arc<Session>,
+    _handle: Arc<russh::client::Handle<SshClientHandler>>,
 }
 
 impl SerialConsole {
@@ -40,55 +42,55 @@ impl SerialConsole {
         log_path: Option<PathBuf>,
     ) -> Result<Self> {
         let destination = format!("{proxmox_user}@{proxmox_host}");
+        let config = Arc::new(russh::client::Config {
+            keepalive_interval: Some(Duration::from_secs(30)),
+            keepalive_max: 6,
+            ..Default::default()
+        });
+        let handler = SshClientHandler::new();
 
-        let session = Arc::new(
-            SessionBuilder::default()
-                .known_hosts_check(KnownHosts::Accept)
-                .connect_timeout(Duration::from_secs(10))
-                .server_alive_interval(Duration::from_secs(30))
-                .connect(&destination)
-                .await
-                .map_err(|e| eyre!("SSH to Proxmox host {destination} failed: {e}"))?,
-        );
+        let mut handle = tokio::time::timeout(
+            Duration::from_secs(10),
+            russh::client::connect(config, format!("{proxmox_host}:22"), handler),
+        )
+        .await
+        .map_err(|_| eyre!("SSH to Proxmox host {destination} timed out"))?
+        .map_err(|e| eyre!("SSH to Proxmox host {destination} failed: {e}"))?;
+
+        authenticate(&mut handle, proxmox_user)
+            .await
+            .map_err(|e| eyre!("SSH auth to {destination} failed: {e}"))?;
+
+        let handle = Arc::new(handle);
 
         let socket_path = format!("/var/run/qemu-server/{vmid}.serial0");
         let socat_cmd = format!("socat - UNIX-CONNECT:{socket_path}");
 
-        let mut child = session
-            .clone()
-            .arc_command("sh")
-            .arg("-c")
-            .arg(&socat_cmd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| eyre!("Failed to open channel for serial console: {e}"))?;
+
+        channel
+            .exec(true, socat_cmd.as_bytes())
             .await
             .map_err(|e| eyre!("Failed to spawn socat for serial console: {e}"))?;
 
-        let stdin = child
-            .stdin()
-            .take()
-            .ok_or_else(|| eyre!("Failed to get stdin for serial console"))?;
-
-        let stdout = child
-            .stdout()
-            .take()
-            .ok_or_else(|| eyre!("Failed to get stdout for serial console"))?;
+        // Convert the channel to AsyncRead + AsyncWrite stream, then split
+        let stream = channel.into_stream();
+        let (reader, writer) = tokio::io::split(stream);
 
         // Open log file if requested
         let log_file = if let Some(ref path) = log_path {
             if let Some(parent) = path.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
-            let f = tokio::fs::OpenOptions::new()
+            let mut f = tokio::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(path)
                 .await
                 .map_err(|e| eyre!("Failed to open serial log {}: {e}", path.display()))?;
-            // Write header
-            let mut f = f;
             let header = format!(
                 "--- Serial console log for VMID {vmid} at {} ---\n",
                 chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
@@ -103,7 +105,7 @@ impl SerialConsole {
         // Flushes partial lines (like "login: " prompts) after 500ms of quiet.
         let (lines_tx, lines_rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout);
+            let mut reader = BufReader::new(reader);
             let mut buf = vec![0u8; 4096];
             let mut partial = String::new();
 
@@ -148,15 +150,13 @@ impl SerialConsole {
                     }
                 }
             }
-            // Wait for the child to exit so it's not orphaned
-            let _ = child.wait().await;
         });
 
         Ok(Self {
-            stdin,
+            writer,
             lines_rx,
             log_file,
-            _session: session,
+            _handle: handle,
         })
     }
 
@@ -173,11 +173,11 @@ impl SerialConsole {
     /// Send a command to the serial console (appends \r\n).
     pub async fn send(&mut self, cmd: &str) -> Result<()> {
         self.log(">>>", cmd).await;
-        self.stdin
+        self.writer
             .write_all(format!("{cmd}\r\n").as_bytes())
             .await
             .map_err(|e| eyre!("Failed to write to serial console: {e}"))?;
-        self.stdin
+        self.writer
             .flush()
             .await
             .map_err(|e| eyre!("Failed to flush serial console: {e}"))?;
@@ -188,11 +188,11 @@ impl SerialConsole {
     pub async fn send_raw(&mut self, data: &str) -> Result<()> {
         let display = data.replace('\r', "\\r").replace('\n', "\\n");
         self.log(">>>", &format!("(raw) {display}")).await;
-        self.stdin
+        self.writer
             .write_all(data.as_bytes())
             .await
             .map_err(|e| eyre!("Failed to write to serial console: {e}"))?;
-        self.stdin
+        self.writer
             .flush()
             .await
             .map_err(|e| eyre!("Failed to flush serial console: {e}"))?;

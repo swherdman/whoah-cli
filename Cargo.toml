@@ -31,7 +31,8 @@ clap = { version = "4.5", features = ["derive"] }
 dialoguer = "0.11"
 
 # SSH
-openssh = { version = "0.11", features = ["process-mux", "native-mux"] }
+russh = "0.58"
+russh-config = "0.58"
 
 # System
 libc = "0.2"

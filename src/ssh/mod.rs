@@ -1,6 +1,8 @@
-pub mod direct;
+pub mod auth;
 pub mod download;
+pub mod handler;
 pub mod mock;
+pub mod oneshot;
 pub mod probe;
 pub mod registry;
 pub mod session;

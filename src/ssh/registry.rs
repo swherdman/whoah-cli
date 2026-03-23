@@ -4,7 +4,6 @@
 //! Sessions register on connect and unregister on close/drop.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -15,15 +14,13 @@ pub struct SessionSnapshot {
     pub id: String,
     pub destination: String,
     pub label: String,
-    pub ctl_path: PathBuf,
-    pub log_path: PathBuf,
-    pub socket_exists: bool,
+    pub connected: bool,
     pub connected_at: Instant,
     pub uptime: Duration,
     pub command_count: u64,
     pub last_command: Option<String>,
     pub last_command_ago: Option<Duration>,
-    pub master_log_tail: Option<String>,
+    pub last_error: Option<String>,
 }
 
 static REGISTRY: OnceLock<Mutex<HashMap<String, SessionEntry>>> = OnceLock::new();
@@ -31,12 +28,12 @@ static REGISTRY: OnceLock<Mutex<HashMap<String, SessionEntry>>> = OnceLock::new(
 struct SessionEntry {
     destination: String,
     label: String,
-    ctl_path: PathBuf,
-    log_path: PathBuf,
+    connected: bool,
     connected_at: Instant,
     command_count: u64,
     last_command: Option<String>,
     last_command_at: Option<Instant>,
+    last_error: Option<String>,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, SessionEntry>> {
@@ -44,16 +41,16 @@ fn registry() -> &'static Mutex<HashMap<String, SessionEntry>> {
 }
 
 /// Register a new session.
-pub fn register(id: &str, destination: &str, ctl_path: PathBuf, log_path: PathBuf) {
+pub fn register(id: &str, destination: &str) {
     let entry = SessionEntry {
         destination: destination.to_string(),
         label: String::new(),
-        ctl_path,
-        log_path,
+        connected: true,
         connected_at: Instant::now(),
         command_count: 0,
         last_command: None,
         last_command_at: None,
+        last_error: None,
     };
     if let Ok(mut reg) = registry().lock() {
         reg.insert(id.to_string(), entry);
@@ -64,6 +61,16 @@ pub fn register(id: &str, destination: &str, ctl_path: PathBuf, log_path: PathBu
 pub fn unregister(id: &str) {
     if let Ok(mut reg) = registry().lock() {
         reg.remove(id);
+    }
+}
+
+/// Mark a session as disconnected with an optional reason.
+pub fn mark_disconnected(id: &str, reason: Option<String>) {
+    if let Ok(mut reg) = registry().lock() {
+        if let Some(entry) = reg.get_mut(id) {
+            entry.connected = false;
+            entry.last_error = reason;
+        }
     }
 }
 
@@ -97,40 +104,18 @@ pub fn all() -> Vec<SessionSnapshot> {
     let now = Instant::now();
     reg.iter()
         .map(|(id, entry)| {
-            let socket_exists = entry.ctl_path.exists();
-            let master_log_tail = if !socket_exists {
-                // Only read log when something is wrong
-                read_log_tail(&entry.log_path, 3)
-            } else {
-                None
-            };
-
             SessionSnapshot {
                 id: id.clone(),
                 destination: entry.destination.clone(),
                 label: entry.label.clone(),
-                ctl_path: entry.ctl_path.clone(),
-                log_path: entry.log_path.clone(),
-                socket_exists,
+                connected: entry.connected,
                 connected_at: entry.connected_at,
                 uptime: now.duration_since(entry.connected_at),
                 command_count: entry.command_count,
                 last_command: entry.last_command.clone(),
                 last_command_ago: entry.last_command_at.map(|t| now.duration_since(t)),
-                master_log_tail,
+                last_error: entry.last_error.clone(),
             }
         })
         .collect()
-}
-
-/// Read the last N lines of a file.
-fn read_log_tail(path: &PathBuf, lines: usize) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let tail: Vec<&str> = content.lines().rev().take(lines).collect();
-    if tail.is_empty() {
-        None
-    } else {
-        let result: Vec<&str> = tail.into_iter().rev().collect();
-        Some(result.join("\n"))
-    }
 }

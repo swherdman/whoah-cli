@@ -1,12 +1,18 @@
 //! Remote file download via SSH + curl with streaming progress.
 //!
-//! Runs `curl --progress-bar` on a remote host via a one-shot SSH
-//! connection (no mux session), parses stderr for progress updates,
-//! and streams them back via an mpsc channel.
+//! Opens an ephemeral russh connection, runs `curl --progress-bar` on the
+//! remote host, parses stderr for progress updates, and streams them back
+//! via an mpsc channel.
+
+use std::sync::Arc;
+use std::time::Duration;
 
 use color_eyre::{eyre::eyre, Result};
-use tokio::io::AsyncReadExt;
+use russh::ChannelMsg;
 use tokio::sync::mpsc;
+
+use super::auth::authenticate;
+use super::handler::SshClientHandler;
 
 /// Download progress update.
 #[derive(Debug, Clone)]
@@ -17,8 +23,8 @@ pub struct DownloadProgress {
 
 /// Download a file from `url` to `dest_path` on a remote host via SSH + curl.
 ///
-/// Streams progress updates through `progress_tx`. Uses a one-shot SSH
-/// connection with no ControlMaster (avoids mux session issues).
+/// Streams progress updates through `progress_tx`. Uses an ephemeral russh
+/// connection (no persistent session needed).
 ///
 /// # Arguments
 /// * `host` — Remote host address
@@ -33,51 +39,61 @@ pub async fn download_remote(
     dest_path: &str,
     progress_tx: mpsc::Sender<DownloadProgress>,
 ) -> Result<()> {
+    let config = Arc::new(russh::client::Config::default());
+    let addr = format!("{host}:22");
+    let handler = SshClientHandler::new();
+
+    let mut handle = tokio::time::timeout(
+        Duration::from_secs(10),
+        russh::client::connect(config, &addr, handler),
+    )
+    .await
+    .map_err(|_| eyre!("SSH to {host} timed out"))?
+    .map_err(|e| eyre!("SSH to {host} failed: {e}"))?;
+
+    authenticate(&mut handle, user)
+        .await
+        .map_err(|e| eyre!("SSH auth to {user}@{host} failed: {e}"))?;
+
+    let mut channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| eyre!("Failed to open channel on {host}: {e}"))?;
+
     let cmd = format!("curl --progress-bar -o '{dest_path}' '{url}'");
+    channel
+        .exec(true, cmd.as_bytes())
+        .await
+        .map_err(|e| eyre!("Failed to exec curl on {host}: {e}"))?;
 
-    let mut child = tokio::process::Command::new("ssh")
-        .args([
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ControlMaster=no",
-            "-o", "ControlPath=none",
-            &format!("{user}@{host}"),
-            &cmd,
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| eyre!("Failed to spawn SSH: {e}"))?;
+    let mut exit_code: Option<u32> = None;
 
-    // Read stderr for curl progress output
-    if let Some(stderr) = child.stderr.take() {
-        let mut reader = tokio::io::BufReader::new(stderr);
-        let mut buf = [0u8; 256];
-
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = String::from_utf8_lossy(&buf[..n]);
-                    if let Some(pct) = parse_curl_percent(&chunk) {
-                        let _ = progress_tx.send(DownloadProgress { percent: pct }).await;
-                    }
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                // curl sends progress to stderr
+                let chunk = String::from_utf8_lossy(&data);
+                if let Some(pct) = parse_curl_percent(&chunk) {
+                    let _ = progress_tx.send(DownloadProgress { percent: pct }).await;
                 }
-                Err(_) => break,
             }
+            Some(ChannelMsg::ExitStatus { exit_status }) => {
+                exit_code = Some(exit_status);
+            }
+            Some(ChannelMsg::Eof) => {}
+            Some(ChannelMsg::Close) => break,
+            Some(_) => {}
+            None => break,
         }
     }
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| eyre!("SSH process error: {e}"))?;
-    if !status.success() {
-        return Err(eyre!(
-            "Download failed (exit code {})",
-            status.code().unwrap_or(-1)
-        ));
+    let _ = handle
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await;
+
+    let code = exit_code.unwrap_or(1);
+    if code != 0 {
+        return Err(eyre!("Download failed (exit code {code})"));
     }
 
     let _ = progress_tx

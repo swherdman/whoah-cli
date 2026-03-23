@@ -12,16 +12,9 @@ use super::Component;
 
 pub struct DebugView {
     sessions: Vec<SessionSnapshot>,
-    mux_masters: Vec<MuxMasterInfo>,
     containers: Vec<ContainerInfo>,
     scroll: u16,
     last_refresh: Option<Instant>,
-}
-
-pub struct MuxMasterInfo {
-    pub pid: String,
-    pub destination: String,
-    pub control_persist: String,
 }
 
 pub struct ContainerInfo {
@@ -34,7 +27,6 @@ impl DebugView {
     pub fn new() -> Self {
         Self {
             sessions: Vec::new(),
-            mux_masters: Vec::new(),
             containers: Vec::new(),
             scroll: 0,
             last_refresh: None,
@@ -44,7 +36,6 @@ impl DebugView {
     /// Refresh all debug data. Call this from the app on tick or manual refresh.
     pub fn refresh(&mut self) {
         self.sessions = registry::all();
-        self.mux_masters = gather_mux_masters();
         self.containers = gather_containers();
         self.last_refresh = Some(Instant::now());
     }
@@ -101,7 +92,7 @@ impl Component for DebugView {
             )));
         } else {
             for s in &self.sessions {
-                let (icon, icon_color) = if s.socket_exists {
+                let (icon, icon_color) = if s.connected {
                     ("●", p.green_primary)
                 } else {
                     ("✗", p.red_error)
@@ -130,37 +121,6 @@ impl Component for DebugView {
                     ),
                 ]));
 
-                // Control socket path + status
-                let socket_status = if s.socket_exists {
-                    Span::styled("exists", Style::default().fg(p.green_primary))
-                } else {
-                    Span::styled(
-                        "MISSING",
-                        Style::default()
-                            .fg(p.red_error)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                };
-
-                let ctl_short = s
-                    .ctl_path
-                    .to_string_lossy()
-                    .chars()
-                    .rev()
-                    .take(50)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect::<String>();
-
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("      ctl: ...{ctl_short}  socket: "),
-                        Style::default().fg(p.text_disabled),
-                    ),
-                    socket_status,
-                ]));
-
                 // Last command
                 if let Some(ref cmd) = s.last_command {
                     let ago = s
@@ -173,41 +133,15 @@ impl Component for DebugView {
                     )));
                 }
 
-                // Master log tail (only shown when socket is missing)
-                if let Some(ref log) = s.master_log_tail {
-                    for log_line in log.lines() {
-                        lines.push(Line::from(Span::styled(
-                            format!("      log: {log_line}"),
-                            Style::default().fg(p.yellow_warn),
-                        )));
-                    }
+                // Error (only shown when disconnected)
+                if let Some(ref error) = s.last_error {
+                    lines.push(Line::from(Span::styled(
+                        format!("      error: {error}"),
+                        Style::default().fg(p.yellow_warn),
+                    )));
                 }
 
                 lines.push(Line::from(""));
-            }
-        }
-
-        // Mux Masters
-        lines.push(Line::from(Span::styled(
-            "  MUX MASTERS (system-wide)",
-            Style::default()
-                .fg(p.text_bright)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-
-        if self.mux_masters.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "    No mux masters found",
-                Style::default().fg(p.text_disabled),
-            )));
-        } else {
-            for m in &self.mux_masters {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("    {:<10}", m.pid), Style::default().fg(p.text_secondary)),
-                    Span::styled(format!("{:<28}", m.destination), Style::default().fg(p.text_default)),
-                    Span::styled(m.control_persist.clone(), Style::default().fg(p.text_tertiary)),
-                ]));
             }
         }
         lines.push(Line::from(""));
@@ -260,48 +194,6 @@ impl Component for DebugView {
             .position(self.scroll as usize);
         frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
     }
-}
-
-/// Gather SSH mux master processes from the system.
-fn gather_mux_masters() -> Vec<MuxMasterInfo> {
-    let output = std::process::Command::new("sh")
-        .args(["-c", "ps aux | grep 'ssh.*-M.*-f.*-N' | grep -v grep"])
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return Vec::new(),
-    };
-
-    output
-        .lines()
-        .filter_map(|line| {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            if fields.len() < 11 {
-                return None;
-            }
-            let pid = fields[1].to_string();
-            // Find the destination (last non-flag arg)
-            let destination = fields
-                .iter()
-                .rev()
-                .find(|f| !f.starts_with('-') && f.contains('@'))
-                .unwrap_or(&"unknown")
-                .to_string();
-            // Find ControlPersist value
-            let control_persist = fields
-                .iter()
-                .find(|f| f.starts_with("ControlPersist"))
-                .unwrap_or(&"unknown")
-                .to_string();
-
-            Some(MuxMasterInfo {
-                pid,
-                destination,
-                control_persist,
-            })
-        })
-        .collect()
 }
 
 /// Gather Docker container info.

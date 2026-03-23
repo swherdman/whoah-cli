@@ -173,9 +173,7 @@ impl App {
 
         // Cleanup
         if let Some(host) = self.host.take() {
-            if let Ok(host) = Arc::try_unwrap(host) {
-                let _ = host.close().await;
-            }
+            let _ = host.close().await;
         }
 
         tui.exit()?;
@@ -449,11 +447,9 @@ impl App {
                     self.needs_reconnect = false;
                     // Disconnect old host
                     if let Some(host) = self.host.take() {
-                        if let Ok(h) = Arc::try_unwrap(host) {
-                            tokio::spawn(async move {
-                                let _ = h.close().await;
-                            });
-                        }
+                        tokio::spawn(async move {
+                            let _ = host.close().await;
+                        });
                     }
                     self.status_bar.connected = false;
                     self.spawn_connect();
@@ -858,11 +854,9 @@ impl App {
                     tracing::info!("Build pipeline finished — connecting to new host");
                     // Drop stale connection and connect to the (possibly new) IP
                     if let Some(host) = self.host.take() {
-                        if let Ok(h) = Arc::try_unwrap(host) {
-                            tokio::spawn(async move {
-                                let _ = h.close().await;
-                            });
-                        }
+                        tokio::spawn(async move {
+                            let _ = host.close().await;
+                        });
                     }
                     self.status_bar.connected = false;
                     self.needs_reconnect = false;

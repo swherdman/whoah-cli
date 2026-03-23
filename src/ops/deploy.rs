@@ -14,7 +14,6 @@ use crate::config::loader::resolve_proxmox_config;
 use crate::event::BuildEvent;
 use crate::ops::proxmox;
 use crate::ops::serial::SerialConsole;
-use crate::ssh::direct::DirectSsh;
 use crate::ssh::session::SshHost;
 use crate::ssh::RemoteHost;
 
@@ -724,7 +723,7 @@ async fn run_os_setup(
 
     let log_path = build_log.clone();
 
-    let helios = DirectSsh::connect(&helios_config).await?;
+    let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/pkg-update");
 
     // --- Step: OS update + reboot ---
@@ -808,10 +807,6 @@ async fn continue_os_setup_after_reboot(
     tx: &mpsc::UnboundedSender<BuildEvent>,
     log_path: &PathBuf,
 ) -> Result<()> {
-    // Use DirectSsh for build pipeline commands — the openssh crate's mux has
-    // a bug where it refuses new channels. DirectSsh uses the system ssh binary
-    // with OS-level ControlMaster which is proven reliable.
-    // See docs/BUG-ssh-mux-channel-refusal.md
     let helios_config = HostConfig {
         address: helios_ip.to_string(),
         ssh_user: ssh_user.to_string(),
@@ -819,7 +814,7 @@ async fn continue_os_setup_after_reboot(
         host_type: None,
     };
 
-    let helios = DirectSsh::connect(&helios_config).await?;
+    let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/OS-setup");
     let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
         &helios, log_path.clone(), tx, "os-cleanup",
@@ -950,7 +945,7 @@ async fn run_omicron_build(
 
     let log_path = build_log.clone();
 
-    let helios = DirectSsh::connect(&helios_config).await?;
+    let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/Omicron");
     let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
         &helios, log_path.clone(), tx, "repo-clone",
@@ -1208,7 +1203,7 @@ print('Updated vdevs to {vdev_count}')
         let count_config = helios_config.clone();
         let count_repo = repo_path.to_string();
         tokio::spawn(async move {
-            let count_ssh = match DirectSsh::connect(&count_config).await {
+            let count_ssh = match SshHost::connect(&count_config).await {
                 Ok(h) => h,
                 Err(e) => {
                     tracing::debug!("Crate count SSH failed (non-fatal): {e}");
@@ -1270,7 +1265,7 @@ print('Updated vdevs to {vdev_count}')
     let log_tail_path = log_file_path.clone();
     let log_tail_handle = tokio::spawn(async move {
         // Connect a separate SSH session for tailing
-        let tail_ssh = match DirectSsh::connect(&log_tail_host).await {
+        let tail_ssh = match SshHost::connect(&log_tail_host).await {
             Ok(h) => h,
             Err(e) => {
                 tracing::debug!("LOG tail SSH failed (non-fatal): {e}");
@@ -1671,7 +1666,7 @@ async fn wait_for_ssh(ip: &str, user: &str, timeout: Duration) -> Result<()> {
             return Err(eyre!("SSH did not come back within {}s", timeout.as_secs()));
         }
 
-        match DirectSsh::connect(&config).await {
+        match SshHost::connect(&config).await {
             Ok(host) => {
                 let _ = host.close().await;
                 return Ok(());
@@ -1724,7 +1719,7 @@ async fn run_setup_pkg_cache(
         role: crate::config::HostRole::Combined,
         host_type: None,
     };
-    let helios = DirectSsh::connect(&helios_config).await.map_err(|e| {
+    let helios = SshHost::connect(&helios_config).await.map_err(|e| {
         send(tx, BuildEvent::StepFailed("cache-configure".into(), format!("SSH failed: {e}")));
         e
     })?;

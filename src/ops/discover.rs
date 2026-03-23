@@ -10,6 +10,7 @@
 use color_eyre::{eyre::eyre, Result};
 
 use crate::config::types::*;
+use crate::ssh::oneshot;
 
 /// Configuration discovered from a running Helios host.
 #[derive(Debug, Clone)]
@@ -252,28 +253,13 @@ pub fn parse_rust_constant(grep_output: &str) -> Option<u32> {
     None
 }
 
-/// Run a command on a remote host via one-shot SSH (no mux session).
+/// Run a command on a remote host via one-shot SSH.
 async fn ssh_command(host: &str, user: &str, cmd: &str) -> Result<String> {
-    let output = tokio::process::Command::new("ssh")
-        .args([
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ControlMaster=no",
-            "-o", "ControlPath=none",
-            &format!("{user}@{host}"),
-            cmd,
-        ])
-        .output()
-        .await
-        .map_err(|e| eyre!("SSH command failed: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(eyre!("Command failed: {}", stderr.trim()));
+    let output = oneshot::one_shot(host, user, cmd, 30).await?;
+    if output.exit_code != 0 {
+        return Err(eyre!("Command failed: {}", output.stderr.trim()));
     }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(output.stdout)
 }
 
 #[cfg(test)]

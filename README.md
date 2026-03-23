@@ -192,7 +192,7 @@ iso_file = "helios-install-vga.iso"
 ## Architecture
 
 - **Build pipeline** — 8-phase execution model (Provision → Configure → Cache → OS Setup → Build → Patch → Deploy → Configure) with per-step progress tracking
-- **SSH** — `DirectSsh` for build commands (system `ssh` binary with OS-level ControlMaster), `SshHost` (openssh crate) for monitoring
+- **SSH** — Pure-Rust SSH2 via `russh` with native channel multiplexing (no ControlMaster, no external processes)
 - **Serial console** — Automated Helios installation via socat over SSH to Proxmox
 - **Package caching** — Local nginx reverse proxy + squid SSL-bump forward proxy for build acceleration
 - **Git ref selector** — Branch/tag/commit picker with GitHub API integration, session caching, and autocomplete. Provider trait for future GitLab/generic support.

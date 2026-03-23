@@ -8,6 +8,7 @@ use color_eyre::{eyre::eyre, Result};
 use serde::Deserialize;
 
 use crate::config::types::ProxmoxHypervisorConfig;
+use crate::ssh::oneshot;
 
 /// Per-field validation status.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,28 +302,13 @@ pub async fn validate_proxmox(
     result
 }
 
-/// Run a command on the Proxmox host via one-shot SSH (no mux session).
+/// Run a command on the Proxmox host via one-shot SSH.
 async fn ssh_command(host: &str, user: &str, cmd: &str) -> Result<String> {
-    let output = tokio::process::Command::new("ssh")
-        .args([
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ControlMaster=no",
-            "-o", "ControlPath=none",
-            &format!("{user}@{host}"),
-            cmd,
-        ])
-        .output()
-        .await
-        .map_err(|e| eyre!("SSH command failed: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(eyre!("Command failed: {}", stderr.trim()));
+    let output = oneshot::one_shot(host, user, cmd, 30).await?;
+    if output.exit_code != 0 {
+        return Err(eyre!("Command failed: {}", output.stderr.trim()));
     }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(output.stdout)
 }
 
 // ── VM queries ─────────────────────────────────────────────────────────

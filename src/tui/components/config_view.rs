@@ -1496,7 +1496,7 @@ impl ConfigView {
                 picker.render(frame, inner, p);
             }
             CreateFlow::ProxmoxVmLoading { ref message } => {
-                let popup_h = 3u16.min(inner.height.saturating_sub(2)).max(3);
+                let popup_h = inner.height.saturating_sub(2).clamp(3, 5);
                 let popup_w = 40u16.min(inner.width.saturating_sub(4));
                 let x = inner.x + (inner.width.saturating_sub(popup_w)) / 2;
                 let y = inner.y + (inner.height.saturating_sub(popup_h)) / 2;
