@@ -153,37 +153,26 @@ impl RemoteHost for SshHost {
         let mut stderr = Vec::new();
         let mut exit_code: Option<u32> = None;
 
-        let result = tokio::time::timeout(Duration::from_secs(120), async {
-            loop {
-                match channel.wait().await {
-                    Some(ChannelMsg::Data { data }) => {
-                        stdout.extend_from_slice(&data);
-                    }
-                    Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
-                        stderr.extend_from_slice(&data);
-                    }
-                    Some(ChannelMsg::ExitStatus { exit_status }) => {
-                        exit_code = Some(exit_status);
-                    }
-                    Some(ChannelMsg::Eof) => {}
-                    Some(ChannelMsg::Close) => break,
-                    Some(_) => {}
-                    None => break,
+        // No hard timeout — keepalives (30s * 6 = 180s) detect dead connections.
+        // Commands like `cargo xtask virtual-hardware create` and `pkg update`
+        // can legitimately run for 5+ minutes. Callers that need shorter timeouts
+        // should wrap in tokio::time::timeout themselves.
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => {
+                    stdout.extend_from_slice(&data);
                 }
+                Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                    stderr.extend_from_slice(&data);
+                }
+                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = Some(exit_status);
+                }
+                Some(ChannelMsg::Eof) => {}
+                Some(ChannelMsg::Close) => break,
+                Some(_) => {}
+                None => break,
             }
-        })
-        .await;
-
-        if result.is_err() {
-            tracing::error!(
-                id = %self.id,
-                host = %self.host,
-                "execute TIMED OUT after 120s"
-            );
-            return Err(eyre!(
-                "SSH command timed out after 120s on {}",
-                self.destination
-            ));
         }
 
         let exit = exit_code.map(|c| c as i32).unwrap_or(-1);
