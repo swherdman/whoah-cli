@@ -88,13 +88,26 @@ pub fn update_deployment_field(
                 .ok_or_else(|| eyre!("Expected '{part}' to be a table"))?;
         }
 
-        // Preserve integer type — reject non-numeric input for integer fields
-        let is_int = table.get(field_name).map(|v| v.is_integer()).unwrap_or(false);
+        // Preserve type: integer fields stay integer, array fields stay array
+        let existing = table.get(field_name);
+        let is_int = existing.map(|v| v.is_integer()).unwrap_or(false);
+        let is_array = existing.map(|v| v.is_array()).unwrap_or(false);
+
         if is_int {
             let int_val: i64 = value
                 .parse()
                 .map_err(|_| eyre!("'{field_name}' must be a number, got '{value}'"))?;
             table.insert(field_name, toml_edit::value(int_val));
+        } else if is_array {
+            // Split comma-separated input into a TOML array of strings
+            let mut arr = toml_edit::Array::new();
+            for item in value.split(',') {
+                let trimmed = item.trim();
+                if !trimmed.is_empty() {
+                    arr.push(trimmed);
+                }
+            }
+            table.insert(field_name, toml_edit::Item::Value(toml_edit::Value::Array(arr)));
         } else {
             table.insert(field_name, toml_edit::value(value));
         }
