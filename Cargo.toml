@@ -31,8 +31,7 @@ clap = { version = "4.5", features = ["derive"] }
 dialoguer = "0.11"
 
 # SSH
-russh = "0.58"
-russh-config = "0.58"
+russh = "0.60"
 
 # System
 libc = "0.2"

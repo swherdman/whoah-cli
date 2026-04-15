@@ -44,7 +44,7 @@ async fn try_agent_auth(handle: &mut Handle<SshClientHandler>, user: &str) -> Re
     tracing::debug!("ssh-agent has {} identities", identities.len());
 
     for key in identities {
-        let public_key = key.clone();
+        let public_key = key.public_key().into_owned();
         // best_supported_rsa_hash returns Result<Option<Option<HashAlg>>>
         // Outer Option: None if server doesn't support ext-info
         // Inner Option: None if no RSA hash preference

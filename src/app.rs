@@ -1192,11 +1192,6 @@ impl App {
             return;
         }
 
-        if self.config.deployment.hypervisor.is_none() {
-            tracing::warn!("Cannot build: no [hypervisor] section in config");
-            return;
-        }
-
         let config = self.config.clone();
         let deploy_name = self.deployment_name.clone();
 

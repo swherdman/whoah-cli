@@ -28,27 +28,88 @@ pub async fn run_deploy(
     tracing::info!("Build log: {}", build_log.display());
 
     let resolved_proxmox = resolve_proxmox_config(&config.deployment)?;
-    let proxmox_config = resolved_proxmox
-        .as_ref()
-        .ok_or_else(|| eyre!("No proxmox config found (check [proxmox] or [hypervisor] section)"))?;
 
-    // Connect to Proxmox host
-    let pve_host_config = HostConfig {
-        address: proxmox_config.host.clone(),
-        ssh_user: proxmox_config.ssh_user.clone(),
-        role: crate::config::HostRole::Combined,
-        host_type: None,
-        ssh_port: None,
+    let (helios_ip, ssh_user) = if let Some(proxmox_config) = resolved_proxmox.as_ref() {
+        // --- Proxmox path: provision VM, install Helios, configure access ---
+        let pve_host_config = HostConfig {
+            address: proxmox_config.host.clone(),
+            ssh_user: proxmox_config.ssh_user.clone(),
+            role: crate::config::HostRole::Combined,
+            host_type: None,
+            ssh_port: proxmox_config.ssh_port,
+        };
+        let pve = SshHost::connect(&pve_host_config).await?;
+
+        // Phase 1: Provision VM + Phase 2: Configure VM
+        let ip = run_provision(&pve, proxmox_config, &tx, &build_log).await?;
+
+        // Phase 3: Configure Access
+        let user = run_configure_access(&ip, &tx).await?;
+
+        let _ = pve.close().await;
+        (ip, user)
+    } else {
+        // --- No hypervisor: host already exists, verify SSH and continue ---
+        let host = config.deployment.hosts.values().next()
+            .ok_or_else(|| eyre!("No hosts configured in deployment"))?;
+
+        let ip = host.address.clone();
+        let user = host.ssh_user.clone();
+
+        if ip.is_empty() {
+            return Err(eyre!("Host address is empty — configure the host address first"));
+        }
+
+        tracing::info!("No hypervisor configured — connecting directly to {user}@{ip}");
+
+        send(&tx, BuildEvent::StepStarted("access-verify".into()));
+        send(
+            &tx,
+            BuildEvent::StepDetail(
+                "access-verify".into(),
+                format!("Connecting to existing host {user}@{ip}..."),
+            ),
+        );
+
+        let test_config = HostConfig {
+            address: ip.clone(),
+            ssh_user: user.clone(),
+            role: crate::config::HostRole::Combined,
+            host_type: None,
+            ssh_port: host.ssh_port,
+        };
+
+        let helios = SshHost::connect(&test_config).await.map_err(|e| {
+            send(
+                &tx,
+                BuildEvent::StepFailed("access-verify".into(), format!("SSH failed: {e}")),
+            );
+            e
+        })?;
+
+        let output = helios.execute("hostname").await.map_err(|e| {
+            send(
+                &tx,
+                BuildEvent::StepFailed("access-verify".into(), format!("Command failed: {e}")),
+            );
+            e
+        })?;
+
+        send(
+            &tx,
+            BuildEvent::StepDetail(
+                "access-verify".into(),
+                format!("Connected — hostname: {}", output.stdout.trim()),
+            ),
+        );
+
+        let _ = helios.close().await;
+        send(&tx, BuildEvent::StepCompleted("access-verify".into()));
+
+        (ip, user)
     };
-    let pve = SshHost::connect(&pve_host_config).await?;
 
-    // Phase 1: Provision VM + Phase 2: Configure VM
-    let helios_ip = run_provision(&pve, proxmox_config, &tx, &build_log).await?;
-
-    // Phase 3: Configure Access
-    let ssh_user = run_configure_access(&helios_ip, &tx).await?;
-
-    // Notify the App of the discovered IP so it can update config
+    // Notify the App of the host IP (updates config if discovered dynamically)
     send(
         &tx,
         BuildEvent::HostDiscovered {
@@ -66,8 +127,6 @@ pub async fn run_deploy(
     // Phase 6-8: Build, Deploy, Configure
     run_omicron_build(&helios_ip, &ssh_user, &config, &tx, &build_log).await?;
 
-    // Cleanup
-    let _ = pve.close().await;
     Ok(())
 }
 
