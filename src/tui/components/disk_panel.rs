@@ -75,12 +75,10 @@ impl Component for DiskPanel {
                 &p,
             );
 
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("rpool: {}% ({:.0} GiB free)", rpool.capacity_pct, free_gib),
-                    Style::default().fg(color),
-                ),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                format!("rpool: {}% ({:.0} GiB free)", rpool.capacity_pct, free_gib),
+                Style::default().fg(color),
+            )]));
             lines.push(theme::render_bar(
                 rpool.capacity_pct as f64 / 100.0,
                 bar_width,
@@ -123,10 +121,16 @@ impl Component for DiskPanel {
         }
 
         // Vdev files — split by type (U.2 data drives vs M.2 boot drives)
-        let u2_vdevs: Vec<_> = status.disk.vdev_files.iter()
+        let u2_vdevs: Vec<_> = status
+            .disk
+            .vdev_files
+            .iter()
             .filter(|v| v.path.contains("u2_"))
             .collect();
-        let m2_vdevs: Vec<_> = status.disk.vdev_files.iter()
+        let m2_vdevs: Vec<_> = status
+            .disk
+            .vdev_files
+            .iter()
             .filter(|v| v.path.contains("m2_"))
             .collect();
 
@@ -188,16 +192,12 @@ impl Component for DiskPanel {
         }
 
         let total_lines = lines.len();
-        frame.render_widget(
-            Paragraph::new(lines).scroll((self.scroll, 0)),
-            inner,
-        );
+        frame.render_widget(Paragraph::new(lines).scroll((self.scroll, 0)), inner);
 
         // Scrollbar
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(p.border_default));
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(self.scroll as usize);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(self.scroll as usize);
         frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
     }
 }

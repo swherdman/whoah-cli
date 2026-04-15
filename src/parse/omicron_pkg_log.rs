@@ -90,18 +90,24 @@ mod tests {
     fn test_parse_verifying() {
         let line = r#"{"msg":"propolis-server: verifying hash","v":0,"name":"slog-rs","level":30,"time":"2026-03-19T09:33:01.201449194Z","hostname":"helios02","pid":3605,"package":"propolis-server"}"#;
         let event = parse_omicron_pkg_line(line).unwrap();
-        assert_eq!(event, OmicronPkgEvent::Verifying {
-            package: "propolis-server".into(),
-        });
+        assert_eq!(
+            event,
+            OmicronPkgEvent::Verifying {
+                package: "propolis-server".into(),
+            }
+        );
     }
 
     #[test]
     fn test_parse_downloading() {
         let line = r#"{"msg":"propolis-server: downloading prebuilt","v":0,"name":"slog-rs","level":30,"time":"2026-03-19T09:33:02.226746814Z","hostname":"helios02","pid":3605,"package":"propolis-server"}"#;
         let event = parse_omicron_pkg_line(line).unwrap();
-        assert_eq!(event, OmicronPkgEvent::Downloading {
-            package: "propolis-server".into(),
-        });
+        assert_eq!(
+            event,
+            OmicronPkgEvent::Downloading {
+                package: "propolis-server".into(),
+            }
+        );
     }
 
     #[test]
@@ -120,11 +126,15 @@ mod tests {
     #[test]
     fn test_tracker() {
         let mut t = OmicronPkgTracker::default();
-        t.update(&OmicronPkgEvent::Verifying { package: "nexus".into() });
+        t.update(&OmicronPkgEvent::Verifying {
+            package: "nexus".into(),
+        });
         assert!(t.summary().contains("nexus"));
         assert!(t.summary().contains("1 verified"));
 
-        t.update(&OmicronPkgEvent::Downloading { package: "cockroachdb".into() });
+        t.update(&OmicronPkgEvent::Downloading {
+            package: "cockroachdb".into(),
+        });
         assert!(t.summary().contains("cockroachdb"));
         assert!(t.summary().contains("1 downloaded"));
     }

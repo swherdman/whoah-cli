@@ -146,8 +146,7 @@ fn parse_commit_list(json: &str) -> Vec<CommitEntry> {
 
     while pos < json.len() {
         if let Some(sha) = find_json_string(json, &mut pos, "\"sha\"") {
-            let message = find_json_string(json, &mut pos, "\"message\"")
-                .unwrap_or_default();
+            let message = find_json_string(json, &mut pos, "\"message\"").unwrap_or_default();
             let first_line = message.lines().next().unwrap_or("").to_string();
             if !sha.is_empty() {
                 commits.push(CommitEntry {

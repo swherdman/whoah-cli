@@ -12,17 +12,14 @@ pub fn dashboard_layout(area: Rect) -> DashboardAreas {
     // Tab bar and keybindings are rendered by the outer screen chrome.
     let vertical = Layout::vertical([
         Constraint::Length(1), // status info (host + alerts)
-        Constraint::Min(8),   // main content (services + disk)
+        Constraint::Min(8),    // main content (services + disk)
         Constraint::Length(8), // log panel
     ])
     .split(area);
 
     // Main content: left (services/zones) | right (disk)
-    let horizontal = Layout::horizontal([
-        Constraint::Percentage(45),
-        Constraint::Percentage(55),
-    ])
-    .split(vertical[1]);
+    let horizontal = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(vertical[1]);
 
     DashboardAreas {
         title_bar: vertical[0],

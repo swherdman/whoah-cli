@@ -9,7 +9,7 @@
 //!
 //! Both persist cached data in Docker named volumes across VM rebuilds.
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 
 const NGINX_CONTAINER: &str = "whoah-pkg-cache";
 const NGINX_PORT: u16 = 8888;
@@ -60,7 +60,6 @@ pub async fn ensure_caches() -> Result<CacheInfo> {
     })
 }
 
-
 /// Verify the pkg cache is reachable from a Helios host.
 pub async fn verify_pkg_cache(
     host: &dyn crate::ssh::RemoteHost,
@@ -87,27 +86,18 @@ pub async fn verify_https_proxy(
 }
 
 /// Set the pkg publisher on a Helios host to use the cache.
-pub async fn set_publisher(
-    host: &dyn crate::ssh::RemoteHost,
-    publisher_url: &str,
-) -> Result<()> {
+pub async fn set_publisher(host: &dyn crate::ssh::RemoteHost, publisher_url: &str) -> Result<()> {
     let cmd = format!("pfexec pkg set-publisher -O {publisher_url} helios-dev");
     let output = host.execute(&cmd).await?;
     if output.exit_code != 0 {
-        return Err(eyre!(
-            "Failed to set publisher: {}",
-            output.stderr.trim()
-        ));
+        return Err(eyre!("Failed to set publisher: {}", output.stderr.trim()));
     }
     Ok(())
 }
 
 /// Install the squid CA certificate on a Helios host so it trusts the HTTPS proxy.
 /// Returns the path to the installed cert.
-pub async fn install_ca_cert(
-    host: &dyn crate::ssh::RemoteHost,
-    _lan_ip: &str,
-) -> Result<String> {
+pub async fn install_ca_cert(host: &dyn crate::ssh::RemoteHost, _lan_ip: &str) -> Result<String> {
     let ca_cert = get_ca_cert().await?;
     let remote_cert_path = "/etc/certs/CA/whoah-cache-ca.pem";
 
@@ -116,7 +106,8 @@ pub async fn install_ca_cert(
     // Write cert via bash heredoc — quotes around EOF prevent any expansion
     let write_cmd = format!(
         "pfexec bash -c 'cat > {} << \"EOF\"\n{}\nEOF'",
-        remote_cert_path, ca_cert.trim()
+        remote_cert_path,
+        ca_cert.trim()
     );
     let output = host.execute(&write_cmd).await?;
     if output.exit_code != 0 {
@@ -124,11 +115,17 @@ pub async fn install_ca_cert(
     }
 
     // Verify
-    let verify = host.execute(&format!(
-        "openssl x509 -in {} -noout -subject", remote_cert_path
-    )).await?;
+    let verify = host
+        .execute(&format!(
+            "openssl x509 -in {} -noout -subject",
+            remote_cert_path
+        ))
+        .await?;
     if verify.exit_code != 0 {
-        return Err(eyre!("CA cert verification failed: {}", verify.stderr.trim()));
+        return Err(eyre!(
+            "CA cert verification failed: {}",
+            verify.stderr.trim()
+        ));
     }
 
     Ok(remote_cert_path.to_string())
@@ -191,9 +188,7 @@ async fn ensure_container_running(name: &str) -> bool {
         .await;
 
     match status {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim() == "true"
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim() == "true",
         _ => false,
     }
 }
@@ -212,13 +207,22 @@ async fn start_nginx() -> Result<()> {
 
     let output = tokio::process::Command::new("docker")
         .args([
-            "run", "-d",
+            "run",
+            "-d",
             "--restart=unless-stopped",
-            "--name", NGINX_CONTAINER,
-            "-p", &format!("{}:80", NGINX_PORT),
-            "-v", &format!("{}:/etc/nginx/conf.d/default.conf:ro", config_path.display()),
-            "-v", "whoah-pkg-cache:/var/cache/nginx/pkg",
-            "-v", "whoah-pkg-cache-logs:/var/log/nginx",
+            "--name",
+            NGINX_CONTAINER,
+            "-p",
+            &format!("{}:80", NGINX_PORT),
+            "-v",
+            &format!(
+                "{}:/etc/nginx/conf.d/default.conf:ro",
+                config_path.display()
+            ),
+            "-v",
+            "whoah-pkg-cache:/var/cache/nginx/pkg",
+            "-v",
+            "whoah-pkg-cache-logs:/var/log/nginx",
             NGINX_IMAGE,
         ])
         .output()
@@ -247,13 +251,19 @@ async fn start_squid() -> Result<()> {
 
     let output = tokio::process::Command::new("docker")
         .args([
-            "run", "-d",
+            "run",
+            "-d",
             "--restart=unless-stopped",
-            "--name", SQUID_CONTAINER,
-            "-p", &format!("{}:3128", SQUID_PORT),
-            "-v", "whoah-squid-ssl:/etc/squid/ssl",        // CA cert persists
-            "-v", "whoah-squid-cache:/var/spool/squid",     // cache persists
-            "-v", "whoah-squid-logs:/var/log/squid",        // logs persist
+            "--name",
+            SQUID_CONTAINER,
+            "-p",
+            &format!("{}:3128", SQUID_PORT),
+            "-v",
+            "whoah-squid-ssl:/etc/squid/ssl", // CA cert persists
+            "-v",
+            "whoah-squid-cache:/var/spool/squid", // cache persists
+            "-v",
+            "whoah-squid-logs:/var/log/squid", // logs persist
             SQUID_IMAGE,
         ])
         .output()
@@ -292,24 +302,24 @@ async fn build_squid_image() -> Result<()> {
     tokio::fs::write(
         build_dir.join("Dockerfile"),
         include_str!("../../assets/Dockerfile.squid-ssl"),
-    ).await?;
+    )
+    .await?;
 
     tokio::fs::write(
         build_dir.join("entrypoint.sh"),
         include_str!("../../assets/entrypoint.sh"),
-    ).await?;
+    )
+    .await?;
 
     tokio::fs::write(
         build_dir.join("squid.conf"),
         include_str!("../../assets/squid-ssl-bump.conf"),
-    ).await?;
+    )
+    .await?;
 
     // Build the image
     let output = tokio::process::Command::new("docker")
-        .args([
-            "build", "-t", SQUID_IMAGE,
-            build_dir.to_str().unwrap(),
-        ])
+        .args(["build", "-t", SQUID_IMAGE, build_dir.to_str().unwrap()])
         .output()
         .await
         .map_err(|e| eyre!("Docker build failed: {e}"))?;
@@ -381,7 +391,11 @@ async fn detect_lan_ip_wsl() -> Result<String> {
     for ip in &ips {
         let check = tokio::process::Command::new("curl")
             .args([
-                "-sf", "--connect-timeout", "2", "--max-time", "3",
+                "-sf",
+                "--connect-timeout",
+                "2",
+                "--max-time",
+                "3",
                 &format!("http://{}:{}/", ip, NGINX_PORT),
             ])
             .output()

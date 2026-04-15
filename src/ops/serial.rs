@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::sync::mpsc;
@@ -371,9 +371,6 @@ mod tests {
 
     #[test]
     fn test_strip_color_codes() {
-        assert_eq!(
-            strip_ansi_and_cr("\x1b[32mgreen\x1b[0m text"),
-            "green text"
-        );
+        assert_eq!(strip_ansi_and_cr("\x1b[32mgreen\x1b[0m text"), "green text");
     }
 }

@@ -40,10 +40,9 @@ impl Component for AlertBar {
                 Style::default().fg(p.text_bright).bg(p.yellow_warn),
                 format!(" ! {msg}"),
             ),
-            Some((Severity::Info, msg)) => (
-                Style::default().fg(p.text_default),
-                format!("   {msg}"),
-            ),
+            Some((Severity::Info, msg)) => {
+                (Style::default().fg(p.text_default), format!("   {msg}"))
+            }
             None => return,
         };
 

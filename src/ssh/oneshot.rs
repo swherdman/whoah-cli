@@ -7,12 +7,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use russh::ChannelMsg;
 
+use super::CommandOutput;
 use super::auth::authenticate;
 use super::handler::SshClientHandler;
-use super::CommandOutput;
 
 /// Execute a single command on a remote host via an ephemeral SSH connection.
 ///
@@ -80,7 +80,9 @@ pub async fn one_shot(
         .await;
 
     if result.is_err() {
-        return Err(eyre!("SSH command timed out after {timeout_secs}s on {host}"));
+        return Err(eyre!(
+            "SSH command timed out after {timeout_secs}s on {host}"
+        ));
     }
 
     Ok(CommandOutput {

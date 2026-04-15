@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -81,7 +81,10 @@ impl RecoveryStep {
 pub enum RecoveryEvent {
     StepStarted(RecoveryStep),
     StepOutput(String),
-    ZoneProgress { running: u32, expected: u32 },
+    ZoneProgress {
+        running: u32,
+        expected: u32,
+    },
     StepCompleted(RecoveryStep, Duration),
     StepFailed {
         step: RecoveryStep,
@@ -127,9 +130,7 @@ impl RecoveryParams {
         let network = &config.deployment.network;
         let overrides = &config.build.omicron.overrides;
 
-        let vdev_size = overrides
-            .vdev_size_bytes
-            .unwrap_or(42949672960); // 40 GiB default
+        let vdev_size = overrides.vdev_size_bytes.unwrap_or(42949672960); // 40 GiB default
 
         let dns_ip = network
             .external_dns_ips
@@ -145,7 +146,11 @@ impl RecoveryParams {
             pxa_end: network.instance_pool_range.last.clone(),
             vdev_size_bytes: vdev_size,
             omicron_path: config.build.omicron.repo_path.clone(),
-            expected_service_total: crate::config::types::derive_expected_zones(&config.build.omicron.overrides).values().sum(),
+            expected_service_total: crate::config::types::derive_expected_zones(
+                &config.build.omicron.overrides,
+            )
+            .values()
+            .sum(),
             dns_ip,
             nexus_ip,
         })
@@ -172,27 +177,13 @@ pub async fn run_recovery(
         let step_start = Instant::now();
 
         let result = match step {
-            RecoveryStep::WaitForBaseline => {
-                step_wait_baseline(host, &tx, &cancel).await
-            }
-            RecoveryStep::Uninstall => {
-                step_uninstall(host, params, &tx).await
-            }
-            RecoveryStep::DestroyVirtualHw => {
-                step_destroy_vhw(host, params, &tx).await
-            }
-            RecoveryStep::CreateVirtualHw => {
-                step_create_vhw(host, params, &tx).await
-            }
-            RecoveryStep::Install => {
-                step_install(host, params, &tx).await
-            }
-            RecoveryStep::MonitorZones => {
-                step_monitor_zones(host, params, &tx, &cancel).await
-            }
-            RecoveryStep::Verify => {
-                step_verify(host, params, &tx).await
-            }
+            RecoveryStep::WaitForBaseline => step_wait_baseline(host, &tx, &cancel).await,
+            RecoveryStep::Uninstall => step_uninstall(host, params, &tx).await,
+            RecoveryStep::DestroyVirtualHw => step_destroy_vhw(host, params, &tx).await,
+            RecoveryStep::CreateVirtualHw => step_create_vhw(host, params, &tx).await,
+            RecoveryStep::Install => step_install(host, params, &tx).await,
+            RecoveryStep::MonitorZones => step_monitor_zones(host, params, &tx, &cancel).await,
+            RecoveryStep::Verify => step_verify(host, params, &tx).await,
         };
 
         let elapsed = step_start.elapsed();
@@ -221,7 +212,6 @@ pub async fn run_recovery(
 
     Ok(())
 }
-
 
 // --- Individual Steps ---
 
@@ -274,13 +264,23 @@ async fn step_uninstall(
         params.omicron_path
     );
     let _ = tx
-        .send(RecoveryEvent::StepOutput("Running omicron-package uninstall...".to_string()))
+        .send(RecoveryEvent::StepOutput(
+            "Running omicron-package uninstall...".to_string(),
+        ))
         .await;
 
     let output = host.execute(&cmd).await?;
 
     // Send last few lines of output
-    for line in output.stdout.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev() {
+    for line in output
+        .stdout
+        .lines()
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         let _ = tx.send(RecoveryEvent::StepOutput(line.to_string())).await;
     }
 
@@ -305,18 +305,32 @@ async fn step_destroy_vhw(
         params.omicron_path
     );
     let _ = tx
-        .send(RecoveryEvent::StepOutput("Destroying virtual hardware...".to_string()))
+        .send(RecoveryEvent::StepOutput(
+            "Destroying virtual hardware...".to_string(),
+        ))
         .await;
 
     let output = host.execute(&cmd).await?;
 
-    for line in output.stdout.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
+    for line in output
+        .stdout
+        .lines()
+        .rev()
+        .take(3)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         let _ = tx.send(RecoveryEvent::StepOutput(line.to_string())).await;
     }
 
     if output.exit_code != 0 {
         let err_msg = output.stderr.lines().last().unwrap_or("unknown error");
-        return Err(eyre!("virtual-hardware destroy failed (exit {}): {}", output.exit_code, err_msg));
+        return Err(eyre!(
+            "virtual-hardware destroy failed (exit {}): {}",
+            output.exit_code,
+            err_msg
+        ));
     }
 
     Ok(())
@@ -340,12 +354,22 @@ async fn step_create_vhw(
         params.vdev_size_bytes,
     );
     let _ = tx
-        .send(RecoveryEvent::StepOutput("Creating virtual hardware...".to_string()))
+        .send(RecoveryEvent::StepOutput(
+            "Creating virtual hardware...".to_string(),
+        ))
         .await;
 
     let output = host.execute(&cmd).await?;
 
-    for line in output.stdout.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev() {
+    for line in output
+        .stdout
+        .lines()
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         let _ = tx.send(RecoveryEvent::StepOutput(line.to_string())).await;
     }
 
@@ -371,12 +395,22 @@ async fn step_install(
         params.omicron_path
     );
     let _ = tx
-        .send(RecoveryEvent::StepOutput("Running omicron-package install...".to_string()))
+        .send(RecoveryEvent::StepOutput(
+            "Running omicron-package install...".to_string(),
+        ))
         .await;
 
     let output = host.execute(&cmd).await?;
 
-    for line in output.stdout.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev() {
+    for line in output
+        .stdout
+        .lines()
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         let _ = tx.send(RecoveryEvent::StepOutput(line.to_string())).await;
     }
 
@@ -417,7 +451,9 @@ async fn step_monitor_zones(
         let zone_list = zones::parse_zoneadm_list(&output.stdout).unwrap_or_default();
         let running = zone_list
             .iter()
-            .filter(|z| z.status == zones::ZoneStatus::Running && z.kind == zones::ZoneKind::Service)
+            .filter(|z| {
+                z.status == zones::ZoneStatus::Running && z.kind == zones::ZoneKind::Service
+            })
             .count() as u32;
 
         let _ = tx
@@ -460,7 +496,9 @@ async fn step_verify(
             .await;
     } else {
         let _ = tx
-            .send(RecoveryEvent::StepOutput("DNS: not resolving (may need more time)".to_string()))
+            .send(RecoveryEvent::StepOutput(
+                "DNS: not resolving (may need more time)".to_string(),
+            ))
             .await;
     }
 
@@ -471,15 +509,16 @@ async fn step_verify(
         params.nexus_ip.clone()
     };
 
-    let ping_cmd = format!(
-        "curl -sf --connect-timeout 3 --max-time 5 http://{nexus_ip}/v1/ping 2>/dev/null"
-    );
+    let ping_cmd =
+        format!("curl -sf --connect-timeout 3 --max-time 5 http://{nexus_ip}/v1/ping 2>/dev/null");
     let ping_output = host.execute(&ping_cmd).await?;
     let reachable = network::parse_nexus_ping(ping_output.exit_code);
 
     if reachable {
         let _ = tx
-            .send(RecoveryEvent::StepOutput(format!("Nexus: reachable at {nexus_ip}")))
+            .send(RecoveryEvent::StepOutput(format!(
+                "Nexus: reachable at {nexus_ip}"
+            )))
             .await;
     } else {
         let _ = tx
@@ -495,7 +534,9 @@ async fn step_verify(
         .await?;
     let sled_state = svcs_output.stdout.trim();
     let _ = tx
-        .send(RecoveryEvent::StepOutput(format!("sled-agent: {sled_state}")))
+        .send(RecoveryEvent::StepOutput(format!(
+            "sled-agent: {sled_state}"
+        )))
         .await;
 
     // Verification passes even if Nexus isn't ready yet — zones being up is the key indicator
@@ -514,14 +555,18 @@ fn detect_workaround(step: RecoveryStep, error: &str) -> Option<Workaround> {
             }
         }
         RecoveryStep::CreateVirtualHw => {
-            if error.contains("UnexpectedUuid") || error.contains("zpool") || error.contains("oxp_") {
+            if error.contains("UnexpectedUuid") || error.contains("zpool") || error.contains("oxp_")
+            {
                 Some(Workaround::DestroyStaleZpools)
             } else {
                 None
             }
         }
         RecoveryStep::Install => {
-            if error.contains("permission") || error.contains("Permission") || error.contains("owned by") {
+            if error.contains("permission")
+                || error.contains("Permission")
+                || error.contains("owned by")
+            {
                 Some(Workaround::FixOwnership)
             } else {
                 None

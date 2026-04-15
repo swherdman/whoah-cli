@@ -39,7 +39,10 @@ pub fn parse_cargo_line(line: &str) -> Option<CargoEvent> {
                 .unwrap_or(v)
                 .to_string()
         });
-        return Some(CargoEvent::Compiling { crate_name, version });
+        return Some(CargoEvent::Compiling {
+            crate_name,
+            version,
+        });
     }
 
     if trimmed.starts_with("Downloading crates") || trimmed == "Downloading" {
@@ -107,7 +110,10 @@ impl CargoTracker {
         if let Some(ref name) = self.last_crate {
             if let Some(total) = self.estimated_total {
                 let pct = (self.compiled_count as f32 / total as f32 * 100.0).min(100.0) as u32;
-                format!("Compiling {name} ({}/{total} \u{2014} {pct}%)", self.compiled_count)
+                format!(
+                    "Compiling {name} ({}/{total} \u{2014} {pct}%)",
+                    self.compiled_count
+                )
             } else {
                 format!("Compiling {name} ({} crates)", self.compiled_count)
             }
@@ -126,21 +132,27 @@ mod tests {
     #[test]
     fn test_parse_compiling() {
         let event = parse_cargo_line("   Compiling serde v1.0.228").unwrap();
-        assert_eq!(event, CargoEvent::Compiling {
-            crate_name: "serde".into(),
-            version: Some("1.0.228".into()),
-        });
+        assert_eq!(
+            event,
+            CargoEvent::Compiling {
+                crate_name: "serde".into(),
+                version: Some("1.0.228".into()),
+            }
+        );
     }
 
     #[test]
     fn test_parse_compiling_path_dep() {
-        let event = parse_cargo_line(
-            "   Compiling omicron-package v0.1.0 (/home/user/omicron/package)"
-        ).unwrap();
-        assert_eq!(event, CargoEvent::Compiling {
-            crate_name: "omicron-package".into(),
-            version: Some("0.1.0".into()),
-        });
+        let event =
+            parse_cargo_line("   Compiling omicron-package v0.1.0 (/home/user/omicron/package)")
+                .unwrap();
+        assert_eq!(
+            event,
+            CargoEvent::Compiling {
+                crate_name: "omicron-package".into(),
+                version: Some("0.1.0".into()),
+            }
+        );
     }
 
     #[test]
@@ -148,10 +160,13 @@ mod tests {
         let event = parse_cargo_line(
             "   Compiling bhyve_api v0.0.0 (https://github.com/oxidecomputer/propolis?rev=36f20be#36f20be9)"
         ).unwrap();
-        assert_eq!(event, CargoEvent::Compiling {
-            crate_name: "bhyve_api".into(),
-            version: Some("0.0.0".into()),
-        });
+        assert_eq!(
+            event,
+            CargoEvent::Compiling {
+                crate_name: "bhyve_api".into(),
+                version: Some("0.0.0".into()),
+            }
+        );
     }
 
     #[test]
@@ -165,15 +180,25 @@ mod tests {
     #[test]
     fn test_parse_downloaded() {
         let event = parse_cargo_line("   Downloaded serde v1.0.228").unwrap();
-        assert_eq!(event, CargoEvent::Downloaded { crate_name: "serde".into() });
+        assert_eq!(
+            event,
+            CargoEvent::Downloaded {
+                crate_name: "serde".into()
+            }
+        );
     }
 
     #[test]
     fn test_parse_finished() {
-        let event = parse_cargo_line(
-            "    Finished `release` profile [optimized] target(s) in 5m 38s"
-        ).unwrap();
-        assert_eq!(event, CargoEvent::Finished { duration: "5m 38s".into() });
+        let event =
+            parse_cargo_line("    Finished `release` profile [optimized] target(s) in 5m 38s")
+                .unwrap();
+        assert_eq!(
+            event,
+            CargoEvent::Finished {
+                duration: "5m 38s".into()
+            }
+        );
     }
 
     #[test]
@@ -188,13 +213,21 @@ mod tests {
         let mut t = CargoTracker::default();
         assert_eq!(t.summary(), "Starting...");
 
-        t.update(&CargoEvent::Compiling { crate_name: "serde".into(), version: None });
+        t.update(&CargoEvent::Compiling {
+            crate_name: "serde".into(),
+            version: None,
+        });
         assert_eq!(t.summary(), "Compiling serde (1 crates)");
 
-        t.update(&CargoEvent::Compiling { crate_name: "tokio".into(), version: None });
+        t.update(&CargoEvent::Compiling {
+            crate_name: "tokio".into(),
+            version: None,
+        });
         assert_eq!(t.summary(), "Compiling tokio (2 crates)");
 
-        t.update(&CargoEvent::Finished { duration: "5m 38s".into() });
+        t.update(&CargoEvent::Finished {
+            duration: "5m 38s".into(),
+        });
         assert_eq!(t.summary(), "Finished in 5m 38s");
     }
 
@@ -203,20 +236,32 @@ mod tests {
         let mut t = CargoTracker::default();
         t.set_estimated_total(583);
 
-        t.update(&CargoEvent::Compiling { crate_name: "serde".into(), version: None });
+        t.update(&CargoEvent::Compiling {
+            crate_name: "serde".into(),
+            version: None,
+        });
         assert_eq!(t.summary(), "Compiling serde (1/583 \u{2014} 0%)");
 
         for _ in 0..422 {
-            t.update(&CargoEvent::Compiling { crate_name: "x".into(), version: None });
+            t.update(&CargoEvent::Compiling {
+                crate_name: "x".into(),
+                version: None,
+            });
         }
-        t.update(&CargoEvent::Compiling { crate_name: "tokio".into(), version: None });
+        t.update(&CargoEvent::Compiling {
+            crate_name: "tokio".into(),
+            version: None,
+        });
         assert_eq!(t.summary(), "Compiling tokio (424/583 \u{2014} 72%)");
     }
 
     #[test]
     fn test_tracker_without_total_unchanged() {
         let mut t = CargoTracker::default();
-        t.update(&CargoEvent::Compiling { crate_name: "serde".into(), version: None });
+        t.update(&CargoEvent::Compiling {
+            crate_name: "serde".into(),
+            version: None,
+        });
         assert_eq!(t.summary(), "Compiling serde (1 crates)");
     }
 }

@@ -12,13 +12,13 @@ use super::deployment_panel::DeploymentPanel;
 use super::hypervisor_panel::HypervisorPanel;
 use super::popup_picker::{PopupAction, PopupPicker};
 use crate::config::editor::create_hypervisor;
-use crate::ssh::probe::SshProbeStatus;
 use crate::config::loader::{
     find_referencing_deployments, list_deployments, list_hypervisors, load_deployment,
     load_deployment_state, load_hypervisor,
 };
 use crate::config::types::{DeploymentConfig, HypervisorType};
-use crate::tui::theme::{panel_block, Palette};
+use crate::ssh::probe::SshProbeStatus;
+use crate::tui::theme::{Palette, panel_block};
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -45,9 +45,17 @@ pub enum ConfigViewEvent {
     /// Request async git ref fetch.
     FetchGitRefs { repo_url: String },
     /// Request SSH credential probe.
-    ProbeSsh { host: String, user: String, port: u16 },
+    ProbeSsh {
+        host: String,
+        user: String,
+        port: u16,
+    },
     /// Request Proxmox config validation.
-    ValidateProxmox { host: String, user: String, port: u16 },
+    ValidateProxmox {
+        host: String,
+        user: String,
+        port: u16,
+    },
     /// Request ISO download.
     DownloadIso {
         host: String,
@@ -58,16 +66,30 @@ pub enum ConfigViewEvent {
     },
     /// Request Proxmox VM list for deployment creation.
     ListProxmoxVms {
-        name: String, host: String, user: String, port: u16,
-        hypervisor_ref: String, import: bool,
+        name: String,
+        host: String,
+        user: String,
+        port: u16,
+        hypervisor_ref: String,
+        import: bool,
     },
     /// Request Proxmox VM config query.
     QueryProxmoxVmConfig {
-        name: String, host: String, user: String, port: u16,
-        hypervisor_ref: String, vmid: u32,
+        name: String,
+        host: String,
+        user: String,
+        port: u16,
+        hypervisor_ref: String,
+        vmid: u32,
     },
     /// Request host discovery for importing an existing deployment.
-    DiscoverHost { name: String, host: String, user: String, port: u16, hypervisor_ref: Option<String> },
+    DiscoverHost {
+        name: String,
+        host: String,
+        user: String,
+        port: u16,
+        hypervisor_ref: Option<String>,
+    },
     /// A hypervisor was deleted.
     HypervisorDeleted { name: String },
 }
@@ -84,27 +106,67 @@ enum CreateFlow {
     Inactive,
     // --- Hypervisor flow ---
     /// User is picking the hypervisor type.
-    HypervisorType { picker: PopupPicker },
+    HypervisorType {
+        picker: PopupPicker,
+    },
     /// User is entering the hypervisor name.
-    HypervisorName { htype: HypervisorType, input: Input },
+    HypervisorName {
+        htype: HypervisorType,
+        input: Input,
+    },
     // --- Deployment flow ---
     /// User is entering the deployment name.
-    DeploymentName { input: Input },
+    DeploymentName {
+        input: Input,
+    },
     /// User is entering the host address.
-    DeploymentHost { name: String, input: Input },
+    DeploymentHost {
+        name: String,
+        input: Input,
+    },
     /// User is entering the SSH user.
-    DeploymentSshUser { name: String, host: String, input: Input },
+    DeploymentSshUser {
+        name: String,
+        host: String,
+        input: Input,
+    },
     /// User is picking new vs existing.
-    DeploymentMode { name: String, host: String, user: String, picker: PopupPicker },
+    DeploymentMode {
+        name: String,
+        host: String,
+        user: String,
+        picker: PopupPicker,
+    },
     /// User is picking a hypervisor (optional).
-    DeploymentHypervisor { name: String, host: String, user: String, import: bool, picker: PopupPicker },
+    DeploymentHypervisor {
+        name: String,
+        host: String,
+        user: String,
+        import: bool,
+        picker: PopupPicker,
+    },
     // --- Proxmox VM setup (after hypervisor selection) ---
     /// For new deployments: user enters vmid.
-    ProxmoxVmId { name: String, host: String, user: String, hypervisor_ref: String, input: Input },
+    ProxmoxVmId {
+        name: String,
+        host: String,
+        user: String,
+        hypervisor_ref: String,
+        input: Input,
+    },
     /// For existing deployments: user picks from VM list.
-    ProxmoxVmPicker { name: String, host: String, user: String, hypervisor_ref: String, picker: PopupPicker, vms: Vec<crate::ops::hypervisor_proxmox_validate::ProxmoxVm> },
+    ProxmoxVmPicker {
+        name: String,
+        host: String,
+        user: String,
+        hypervisor_ref: String,
+        picker: PopupPicker,
+        vms: Vec<crate::ops::hypervisor_proxmox_validate::ProxmoxVm>,
+    },
     /// Waiting for async VM list or VM config query.
-    ProxmoxVmLoading { message: String },
+    ProxmoxVmLoading {
+        message: String,
+    },
 }
 
 // ── ConfigView ─────────────────────────────────────────────────────────
@@ -149,7 +211,9 @@ impl ConfigView {
             deployment_list_state: ListState::default(),
             hypervisor_list_state: ListState::default(),
             focus: ConfigFocus::LeftPanel,
-            active_panel: ActivePanel::Prompt("Select a deployment to view its configuration.".into()),
+            active_panel: ActivePanel::Prompt(
+                "Select a deployment to view its configuration.".into(),
+            ),
             create_flow: CreateFlow::Inactive,
             activated_name: Some(initial_deployment.to_string()),
             activated_config: None,
@@ -204,9 +268,7 @@ impl ConfigView {
                     ConfigViewEvent::Ignored // App handles screen switch
                 }
             }
-            KeyCode::Tab => {
-                self.toggle_focus().unwrap_or(ConfigViewEvent::Consumed)
-            }
+            KeyCode::Tab => self.toggle_focus().unwrap_or(ConfigViewEvent::Consumed),
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.focus == ConfigFocus::LeftPanel {
                     self.left_panel_down();
@@ -292,16 +354,16 @@ impl ConfigView {
     /// Get the name of the currently selected item (deployment or hypervisor).
     pub fn selected_name(&self) -> Option<String> {
         match self.section {
-            ConfigSection::Deployments => {
-                self.deployment_list_state.selected()
-                    .and_then(|idx| self.deployments.get(idx))
-                    .cloned()
-            }
-            ConfigSection::Hypervisors => {
-                self.hypervisor_list_state.selected()
-                    .and_then(|idx| self.hypervisors.get(idx))
-                    .cloned()
-            }
+            ConfigSection::Deployments => self
+                .deployment_list_state
+                .selected()
+                .and_then(|idx| self.deployments.get(idx))
+                .cloned(),
+            ConfigSection::Hypervisors => self
+                .hypervisor_list_state
+                .selected()
+                .and_then(|idx| self.hypervisors.get(idx))
+                .cloned(),
         }
     }
 
@@ -311,7 +373,10 @@ impl ConfigView {
         // Check if this is an SSH probe result that should trigger Proxmox validation
         let trigger_proxmox = matches!(
             (&data, &self.active_panel),
-            (PanelData::SshProbeResult(SshProbeStatus::Valid), ActivePanel::Hypervisor(_))
+            (
+                PanelData::SshProbeResult(SshProbeStatus::Valid),
+                ActivePanel::Hypervisor(_)
+            )
         );
 
         if let Some(panel) = self.active_panel_mut() {
@@ -338,12 +403,17 @@ impl ConfigView {
     pub fn cancel_fetch(&mut self) {
         if let Some(panel) = self.active_panel_mut() {
             // Send an Esc key to cancel fetching state
-            panel.handle_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
+            panel.handle_key(KeyEvent::new(
+                KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ));
         }
     }
 
     /// Get the Proxmox config from the active hypervisor panel (if any).
-    pub fn active_hypervisor_proxmox_config(&self) -> Option<crate::config::types::ProxmoxHypervisorConfig> {
+    pub fn active_hypervisor_proxmox_config(
+        &self,
+    ) -> Option<crate::config::types::ProxmoxHypervisorConfig> {
         if let ActivePanel::Hypervisor(panel) = &self.active_panel {
             panel.proxmox_config()
         } else {
@@ -420,9 +490,19 @@ impl ConfigView {
                 PanelAction::ValidateProxmox { host, user, port } => {
                     ConfigViewEvent::ValidateProxmox { host, user, port }
                 }
-                PanelAction::DownloadIso { host, user, port, iso_storage_path, filename } => {
-                    ConfigViewEvent::DownloadIso { host, user, port, iso_storage_path, filename }
-                }
+                PanelAction::DownloadIso {
+                    host,
+                    user,
+                    port,
+                    iso_storage_path,
+                    filename,
+                } => ConfigViewEvent::DownloadIso {
+                    host,
+                    user,
+                    port,
+                    iso_storage_path,
+                    filename,
+                },
                 PanelAction::Deleted { ref name } => {
                     let name = name.clone();
                     self.handle_hypervisor_deleted(&name);
@@ -503,7 +583,8 @@ impl ConfigView {
                 // have multiple hosts, dispatch all probes (e.g. return a Vec or
                 // accumulate additional events for App to drain).
                 let actions = panel.request_probes();
-                if let Some(PanelAction::ProbeSsh { host, user, port }) = actions.into_iter().next() {
+                if let Some(PanelAction::ProbeSsh { host, user, port }) = actions.into_iter().next()
+                {
                     return Some(ConfigViewEvent::ProbeSsh { host, user, port });
                 }
             }
@@ -633,8 +714,7 @@ impl ConfigView {
                             ActivePanel::Deployment(DeploymentPanel::new(name, config, hyp, state));
                     }
                     Err(e) => {
-                        self.active_panel =
-                            ActivePanel::Prompt(format!("Error loading: {e}"));
+                        self.active_panel = ActivePanel::Prompt(format!("Error loading: {e}"));
                     }
                 }
             }
@@ -647,13 +727,11 @@ impl ConfigView {
                 match load_hypervisor(&name) {
                     Ok(config) => {
                         let refs = find_referencing_deployments(&name).unwrap_or_default();
-                        self.active_panel = ActivePanel::Hypervisor(
-                            HypervisorPanel::new(name, config, refs),
-                        );
+                        self.active_panel =
+                            ActivePanel::Hypervisor(HypervisorPanel::new(name, config, refs));
                     }
                     Err(e) => {
-                        self.active_panel =
-                            ActivePanel::Prompt(format!("Error loading: {e}"));
+                        self.active_panel = ActivePanel::Prompt(format!("Error loading: {e}"));
                     }
                 }
             }
@@ -691,7 +769,7 @@ impl ConfigView {
     fn handle_create_flow_key(&mut self, key: KeyEvent) -> ConfigViewEvent {
         match &mut self.create_flow {
             CreateFlow::Inactive => ConfigViewEvent::Consumed,
-            CreateFlow::HypervisorType { ref mut picker } => {
+            CreateFlow::HypervisorType { picker } => {
                 match picker.handle_key(key) {
                     PopupAction::Continue => ConfigViewEvent::Consumed,
                     PopupAction::Cancel => {
@@ -711,10 +789,7 @@ impl ConfigView {
                     }
                 }
             }
-            CreateFlow::HypervisorName {
-                ref htype,
-                ref mut input,
-            } => match key.code {
+            CreateFlow::HypervisorName { htype, input } => match key.code {
                 KeyCode::Enter => {
                     let name = input.value().trim().to_string();
                     let htype = htype.clone();
@@ -729,7 +804,9 @@ impl ConfigView {
                         .chars()
                         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
                     {
-                        tracing::warn!("Name can only contain letters, numbers, hyphens, underscores");
+                        tracing::warn!(
+                            "Name can only contain letters, numbers, hyphens, underscores"
+                        );
                         return ConfigViewEvent::Consumed;
                     }
                     if self.hypervisors.contains(&name) {
@@ -764,15 +841,20 @@ impl ConfigView {
                 }
             },
             // --- Deployment flow ---
-            CreateFlow::DeploymentName { ref mut input } => match key.code {
+            CreateFlow::DeploymentName { input } => match key.code {
                 KeyCode::Enter => {
                     let name = input.value().trim().to_string();
                     if name.is_empty() {
                         tracing::warn!("Deployment name cannot be empty");
                         return ConfigViewEvent::Consumed;
                     }
-                    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-                        tracing::warn!("Name can only contain letters, numbers, hyphens, underscores");
+                    if !name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                    {
+                        tracing::warn!(
+                            "Name can only contain letters, numbers, hyphens, underscores"
+                        );
                         return ConfigViewEvent::Consumed;
                     }
                     if self.deployments.contains(&name) {
@@ -794,7 +876,7 @@ impl ConfigView {
                     ConfigViewEvent::Consumed
                 }
             },
-            CreateFlow::DeploymentHost { ref name, ref mut input } => match key.code {
+            CreateFlow::DeploymentHost { name, input } => match key.code {
                 KeyCode::Enter => {
                     let host = input.value().trim().to_string();
                     if host.is_empty() {
@@ -818,7 +900,7 @@ impl ConfigView {
                     ConfigViewEvent::Consumed
                 }
             },
-            CreateFlow::DeploymentSshUser { ref name, ref host, ref mut input } => match key.code {
+            CreateFlow::DeploymentSshUser { name, host, input } => match key.code {
                 KeyCode::Enter => {
                     let user = input.value().trim().to_string();
                     if user.is_empty() {
@@ -833,7 +915,10 @@ impl ConfigView {
                         user,
                         picker: PopupPicker::new(
                             "Deployment type",
-                            vec!["New (configure manually)".into(), "Existing (import from host)".into()],
+                            vec![
+                                "New (configure manually)".into(),
+                                "Existing (import from host)".into(),
+                            ],
                         ),
                     };
                     ConfigViewEvent::Consumed
@@ -847,7 +932,12 @@ impl ConfigView {
                     ConfigViewEvent::Consumed
                 }
             },
-            CreateFlow::DeploymentMode { ref name, ref host, ref user, ref mut picker } => {
+            CreateFlow::DeploymentMode {
+                name,
+                host,
+                user,
+                picker,
+            } => {
                 match picker.handle_key(key) {
                     PopupAction::Continue => ConfigViewEvent::Consumed,
                     PopupAction::Cancel => {
@@ -872,8 +962,14 @@ impl ConfigView {
                         ConfigViewEvent::Consumed
                     }
                 }
-            },
-            CreateFlow::DeploymentHypervisor { ref name, ref host, ref user, import, ref mut picker } => {
+            }
+            CreateFlow::DeploymentHypervisor {
+                name,
+                host,
+                user,
+                import,
+                picker,
+            } => {
                 match picker.handle_key(key) {
                     PopupAction::Continue => ConfigViewEvent::Consumed,
                     PopupAction::Cancel => {
@@ -891,11 +987,15 @@ impl ConfigView {
                             self.create_flow = CreateFlow::Inactive;
                             if import {
                                 self.create_new_deployment(&name, &host, &user, None);
-                                self.active_panel = ActivePanel::Prompt(
-                                    format!("Discovering config from {user}@{host}..."),
-                                );
+                                self.active_panel = ActivePanel::Prompt(format!(
+                                    "Discovering config from {user}@{host}..."
+                                ));
                                 return ConfigViewEvent::DiscoverHost {
-                                    name, host, user, port: 22, hypervisor_ref: None,
+                                    name,
+                                    host,
+                                    user,
+                                    port: 22,
+                                    hypervisor_ref: None,
                                 };
                             }
                             self.create_new_deployment(&name, &host, &user, None);
@@ -914,8 +1014,12 @@ impl ConfigView {
                                 message: "Loading VMs from Proxmox...".into(),
                             };
                             return ConfigViewEvent::ListProxmoxVms {
-                                name, host, user, port: 22,
-                                hypervisor_ref, import,
+                                name,
+                                host,
+                                user,
+                                port: 22,
+                                hypervisor_ref,
+                                import,
                             };
                         }
 
@@ -923,18 +1027,22 @@ impl ConfigView {
                         self.create_flow = CreateFlow::Inactive;
                         if import {
                             self.create_new_deployment(&name, &host, &user, Some(&hypervisor_ref));
-                            self.active_panel = ActivePanel::Prompt(
-                                format!("Discovering config from {user}@{host}..."),
-                            );
+                            self.active_panel = ActivePanel::Prompt(format!(
+                                "Discovering config from {user}@{host}..."
+                            ));
                             return ConfigViewEvent::DiscoverHost {
-                                name, host, user, port: 22, hypervisor_ref: Some(hypervisor_ref),
+                                name,
+                                host,
+                                user,
+                                port: 22,
+                                hypervisor_ref: Some(hypervisor_ref),
                             };
                         }
                         self.create_new_deployment(&name, &host, &user, Some(&hypervisor_ref));
                         ConfigViewEvent::Consumed
                     }
                 }
-            },
+            }
             // --- Proxmox VM setup ---
             CreateFlow::ProxmoxVmLoading { .. } => {
                 // Waiting for async VM list query — only Esc cancels
@@ -943,45 +1051,59 @@ impl ConfigView {
                 }
                 ConfigViewEvent::Consumed
             }
-            CreateFlow::ProxmoxVmId { ref name, ref host, ref user, ref hypervisor_ref, ref mut input } => {
-                match key.code {
-                    KeyCode::Enter => {
-                        let vmid_str = input.value().trim().to_string();
-                        let name = name.clone();
-                        let host = host.clone();
-                        let user = user.clone();
-                        let hypervisor_ref = hypervisor_ref.clone();
-                        self.create_flow = CreateFlow::Inactive;
+            CreateFlow::ProxmoxVmId {
+                name,
+                host,
+                user,
+                hypervisor_ref,
+                input,
+            } => match key.code {
+                KeyCode::Enter => {
+                    let vmid_str = input.value().trim().to_string();
+                    let name = name.clone();
+                    let host = host.clone();
+                    let user = user.clone();
+                    let hypervisor_ref = hypervisor_ref.clone();
+                    self.create_flow = CreateFlow::Inactive;
 
-                        let vmid = match vmid_str.parse::<u32>() {
-                            Ok(v) => v,
-                            Err(_) => {
-                                tracing::warn!("vmid must be a number");
-                                return ConfigViewEvent::Consumed;
-                            }
-                        };
+                    let vmid = match vmid_str.parse::<u32>() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            tracing::warn!("vmid must be a number");
+                            return ConfigViewEvent::Consumed;
+                        }
+                    };
 
-                        self.create_new_deployment_with_vm(
-                            &name, &host, &user, &hypervisor_ref,
-                            crate::config::types::VmConfig {
-                                vmid,
-                                name: name.clone(),
-                                ..Default::default()
-                            },
-                        );
-                        ConfigViewEvent::Consumed
-                    }
-                    KeyCode::Esc => {
-                        self.create_flow = CreateFlow::Inactive;
-                        ConfigViewEvent::Consumed
-                    }
-                    _ => {
-                        input.handle_event(&crossterm::event::Event::Key(key));
-                        ConfigViewEvent::Consumed
-                    }
+                    self.create_new_deployment_with_vm(
+                        &name,
+                        &host,
+                        &user,
+                        &hypervisor_ref,
+                        crate::config::types::VmConfig {
+                            vmid,
+                            name: name.clone(),
+                            ..Default::default()
+                        },
+                    );
+                    ConfigViewEvent::Consumed
                 }
-            }
-            CreateFlow::ProxmoxVmPicker { ref name, ref host, ref user, ref hypervisor_ref, ref mut picker, ref vms } => {
+                KeyCode::Esc => {
+                    self.create_flow = CreateFlow::Inactive;
+                    ConfigViewEvent::Consumed
+                }
+                _ => {
+                    input.handle_event(&crossterm::event::Event::Key(key));
+                    ConfigViewEvent::Consumed
+                }
+            },
+            CreateFlow::ProxmoxVmPicker {
+                name,
+                host,
+                user,
+                hypervisor_ref,
+                picker,
+                vms,
+            } => {
                 match picker.handle_key(key) {
                     PopupAction::Continue => ConfigViewEvent::Consumed,
                     PopupAction::Cancel => {
@@ -1001,7 +1123,12 @@ impl ConfigView {
                             message: format!("Loading VM {} config...", vmid),
                         };
                         ConfigViewEvent::QueryProxmoxVmConfig {
-                            name, host, user, port: 22, hypervisor_ref, vmid,
+                            name,
+                            host,
+                            user,
+                            port: 22,
+                            hypervisor_ref,
+                            vmid,
                         }
                     }
                 }
@@ -1124,15 +1251,20 @@ impl ConfigView {
             gateway: "0.0.0.0".to_string(),
             external_dns_ips: vec![],
             internal_services_range: crate::config::types::IpRange {
-                first: "0.0.0.0".to_string(), last: "0.0.0.0".to_string(),
+                first: "0.0.0.0".to_string(),
+                last: "0.0.0.0".to_string(),
             },
             infra_ip: "0.0.0.0".to_string(),
             instance_pool_range: crate::config::types::IpRange {
-                first: "0.0.0.0".to_string(), last: "0.0.0.0".to_string(),
+                first: "0.0.0.0".to_string(),
+                last: "0.0.0.0".to_string(),
             },
-            ntp_servers: None, dns_servers: None,
-            external_dns_zone_name: None, rack_subnet: None,
-            uplink_port_speed: None, allowed_source_ips: None,
+            ntp_servers: None,
+            dns_servers: None,
+            external_dns_zone_name: None,
+            rack_subnet: None,
+            uplink_port_speed: None,
+            allowed_source_ips: None,
         };
 
         let config = crate::config::types::DeploymentConfig {
@@ -1181,7 +1313,8 @@ impl ConfigView {
     ) {
         if import {
             // Existing deployment — show VM picker
-            let options: Vec<String> = vms.iter()
+            let options: Vec<String> = vms
+                .iter()
                 .map(|vm| format!("{} - {}", vm.vmid, vm.name))
                 .collect();
             if options.is_empty() {
@@ -1190,14 +1323,20 @@ impl ConfigView {
                 return;
             }
             self.create_flow = CreateFlow::ProxmoxVmPicker {
-                name, host, user, hypervisor_ref,
+                name,
+                host,
+                user,
+                hypervisor_ref,
                 picker: PopupPicker::new("Select VM", options),
                 vms,
             };
         } else {
             // New deployment — prompt for vmid
             self.create_flow = CreateFlow::ProxmoxVmId {
-                name, host, user, hypervisor_ref,
+                name,
+                host,
+                user,
+                hypervisor_ref,
                 input: Input::default(),
             };
         }
@@ -1215,9 +1354,8 @@ impl ConfigView {
         self.create_flow = CreateFlow::Inactive;
         // Create with placeholders then trigger discovery for network/build
         self.create_new_deployment_with_vm(&name, &host, &user, &hypervisor_ref, vm_config);
-        self.active_panel = ActivePanel::Prompt(
-            format!("Discovering config from {user}@{host}..."),
-        );
+        self.active_panel =
+            ActivePanel::Prompt(format!("Discovering config from {user}@{host}..."));
     }
 
     /// Create a deployment from discovered config (import from existing host).
@@ -1315,8 +1453,7 @@ impl ConfigView {
     fn render_impl(&self, frame: &mut Frame, area: Rect) {
         let p = Palette::default();
 
-        let layout =
-            Layout::horizontal([Constraint::Length(24), Constraint::Min(40)]).split(area);
+        let layout = Layout::horizontal([Constraint::Length(24), Constraint::Min(40)]).split(area);
 
         self.render_left_panel(frame, layout[0], &p);
         self.render_right_panel(frame, layout[1], &p);
@@ -1353,14 +1490,12 @@ impl ConfigView {
             })
             .collect();
         // Virtual "Add deployment" entry
-        items.push(
-            ListItem::new(Line::from(Span::styled(
-                "+ Add deployment",
-                Style::default()
-                    .fg(p.text_disabled)
-                    .add_modifier(Modifier::ITALIC),
-            ))),
-        );
+        items.push(ListItem::new(Line::from(Span::styled(
+            "+ Add deployment",
+            Style::default()
+                .fg(p.text_disabled)
+                .add_modifier(Modifier::ITALIC),
+        ))));
         let deploy_list = List::new(items)
             .highlight_style(
                 Style::default()
@@ -1390,19 +1525,15 @@ impl ConfigView {
         let mut hyp_items: Vec<ListItem> = self
             .hypervisors
             .iter()
-            .map(|name| {
-                ListItem::new(name.as_str()).style(Style::default().fg(p.text_tertiary))
-            })
+            .map(|name| ListItem::new(name.as_str()).style(Style::default().fg(p.text_tertiary)))
             .collect();
         // Virtual "Add hypervisor" entry
-        hyp_items.push(
-            ListItem::new(Line::from(Span::styled(
-                "+ Add hypervisor",
-                Style::default()
-                    .fg(p.text_disabled)
-                    .add_modifier(Modifier::ITALIC),
-            ))),
-        );
+        hyp_items.push(ListItem::new(Line::from(Span::styled(
+            "+ Add hypervisor",
+            Style::default()
+                .fg(p.text_disabled)
+                .add_modifier(Modifier::ITALIC),
+        ))));
         let hyp_list = List::new(hyp_items)
             .highlight_style(Style::default().fg(p.green_primary))
             .highlight_symbol(" > ")
@@ -1477,31 +1608,59 @@ impl ConfigView {
         // Overlay: create flow
         match &self.create_flow {
             CreateFlow::Inactive => {}
-            CreateFlow::HypervisorType { ref picker }
-            | CreateFlow::DeploymentMode { ref picker, .. }
-            | CreateFlow::DeploymentHypervisor { ref picker, .. } => {
+            CreateFlow::HypervisorType { picker }
+            | CreateFlow::DeploymentMode { picker, .. }
+            | CreateFlow::DeploymentHypervisor { picker, .. } => {
                 picker.render(frame, inner, p);
             }
-            CreateFlow::HypervisorName { htype, ref input } => {
+            CreateFlow::HypervisorName { htype, input } => {
                 let type_str = format!("{htype:?}").to_lowercase();
-                render_input_popup(frame, inner, p, &format!("New {type_str} Hypervisor"), " Name", input);
+                render_input_popup(
+                    frame,
+                    inner,
+                    p,
+                    &format!("New {type_str} Hypervisor"),
+                    " Name",
+                    input,
+                );
             }
-            CreateFlow::DeploymentName { ref input } => {
+            CreateFlow::DeploymentName { input } => {
                 render_input_popup(frame, inner, p, "New Deployment", " Name", input);
             }
-            CreateFlow::DeploymentHost { ref name, ref input } => {
-                render_input_popup(frame, inner, p, &format!("New Deployment: {name}"), " Host", input);
+            CreateFlow::DeploymentHost { name, input } => {
+                render_input_popup(
+                    frame,
+                    inner,
+                    p,
+                    &format!("New Deployment: {name}"),
+                    " Host",
+                    input,
+                );
             }
-            CreateFlow::DeploymentSshUser { ref name, ref input, .. } => {
-                render_input_popup(frame, inner, p, &format!("New Deployment: {name}"), " SSH User", input);
+            CreateFlow::DeploymentSshUser { name, input, .. } => {
+                render_input_popup(
+                    frame,
+                    inner,
+                    p,
+                    &format!("New Deployment: {name}"),
+                    " SSH User",
+                    input,
+                );
             }
-            CreateFlow::ProxmoxVmId { ref name, ref input, .. } => {
-                render_input_popup(frame, inner, p, &format!("New Deployment: {name}"), " VM ID", input);
+            CreateFlow::ProxmoxVmId { name, input, .. } => {
+                render_input_popup(
+                    frame,
+                    inner,
+                    p,
+                    &format!("New Deployment: {name}"),
+                    " VM ID",
+                    input,
+                );
             }
-            CreateFlow::ProxmoxVmPicker { ref picker, .. } => {
+            CreateFlow::ProxmoxVmPicker { picker, .. } => {
                 picker.render(frame, inner, p);
             }
-            CreateFlow::ProxmoxVmLoading { ref message } => {
+            CreateFlow::ProxmoxVmLoading { message } => {
                 let popup_h = inner.height.saturating_sub(2).clamp(3, 5);
                 let popup_w = 40u16.min(inner.width.saturating_sub(4));
                 let x = inner.x + (inner.width.saturating_sub(popup_w)) / 2;

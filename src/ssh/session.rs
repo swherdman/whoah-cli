@@ -4,15 +4,15 @@
 //! Each connection is a single TCP socket with native SSH2 channel
 //! multiplexing — no ControlMaster, no mux sockets, no external processes.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use color_eyre::{eyre::eyre, Result};
-use russh::client::Handle;
+use color_eyre::{Result, eyre::eyre};
 use russh::ChannelMsg;
 use russh::Disconnect;
+use russh::client::Handle;
 use tokio::sync::mpsc;
 
 use crate::config::HostConfig;
@@ -194,11 +194,7 @@ impl RemoteHost for SshHost {
         })
     }
 
-    async fn execute_streaming(
-        &self,
-        cmd: &str,
-        tx: mpsc::Sender<String>,
-    ) -> Result<i32> {
+    async fn execute_streaming(&self, cmd: &str, tx: mpsc::Sender<String>) -> Result<i32> {
         let cmd_short: String = cmd.chars().take(80).collect();
         let count = self.command_count.fetch_add(1, Ordering::Relaxed) + 1;
         super::registry::record_command(&self.id, &cmd_short);

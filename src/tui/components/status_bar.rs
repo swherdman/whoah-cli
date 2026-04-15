@@ -68,7 +68,9 @@ impl StatusBarComponent {
             vec![
                 Span::styled(
                     format!("{} ", self.deployment_name),
-                    Style::default().fg(p.text_bright).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(p.text_bright)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!("{}  ", self.host),
@@ -81,7 +83,9 @@ impl StatusBarComponent {
             vec![
                 Span::styled(
                     format!("{} ", self.deployment_name),
-                    Style::default().fg(p.text_bright).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(p.text_bright)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("connecting... ", Style::default().fg(p.yellow_warn)),
             ]
@@ -99,12 +103,7 @@ impl StatusBarComponent {
         );
     }
 
-    pub fn render_keybindings_for_screen(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        screen: Screen,
-    ) {
+    pub fn render_keybindings_for_screen(&self, frame: &mut Frame, area: Rect, screen: Screen) {
         self.render_keybindings(frame, area, screen, false);
     }
 

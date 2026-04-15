@@ -1,4 +1,4 @@
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 
 use crate::config::types::*;
 use crate::ssh::RemoteHost;
@@ -69,8 +69,8 @@ pub async fn discover_config(host: &dyn RemoteHost) -> Result<DiscoveredConfig> 
 /// Parse network config from config-rss.toml contents.
 fn parse_network_from_rss(contents: &str) -> Result<NetworkConfig> {
     // config-rss.toml is TOML — parse it
-    let table: toml::Value = toml::from_str(contents)
-        .map_err(|e| eyre!("Failed to parse config-rss.toml: {e}"))?;
+    let table: toml::Value =
+        toml::from_str(contents).map_err(|e| eyre!("Failed to parse config-rss.toml: {e}"))?;
 
     let gateway = table
         .get("rack_network_config")
@@ -165,10 +165,7 @@ fn parse_network_from_rss(contents: &str) -> Result<NetworkConfig> {
 
 /// Count vdev entries in config.toml.
 fn count_vdevs(contents: &str) -> u32 {
-    contents
-        .lines()
-        .filter(|l| l.contains(".vdev"))
-        .count() as u32
+    contents.lines().filter(|l| l.contains(".vdev")).count() as u32
 }
 
 /// Parse a u32 constant from a Rust source grep result.

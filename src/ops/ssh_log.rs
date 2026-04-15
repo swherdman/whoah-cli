@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
@@ -98,7 +98,8 @@ impl<'a> LoggedSsh<'a> {
         for line in output.stderr.lines() {
             self.log_line(&format!("ERR {line}")).await;
         }
-        self.log_line(&format!("--- exit_code={}", output.exit_code)).await;
+        self.log_line(&format!("--- exit_code={}", output.exit_code))
+            .await;
 
         Ok(output)
     }
@@ -160,27 +161,30 @@ impl<'a> LoggedSsh<'a> {
                 // Send to TUI (filtered)
                 let trimmed = line.trim();
                 if !trimmed.is_empty() && !is_noise_line(trimmed) {
-                    let _ = tx.send(BuildEvent::StepDetail(
-                        step_id.clone(),
-                        trimmed.to_string(),
-                    ));
+                    let _ = tx.send(BuildEvent::StepDetail(step_id.clone(), trimmed.to_string()));
                 }
             }
 
             // Log channel close
             if let Some(ref mut f) = log_file {
                 let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
-                let entry = format!("[{timestamp}]     [forward] channel closed after {count} lines\n");
+                let entry =
+                    format!("[{timestamp}]     [forward] channel closed after {count} lines\n");
                 let _ = tokio::io::AsyncWriteExt::write_all(f, entry.as_bytes()).await;
                 let _ = tokio::io::AsyncWriteExt::flush(f).await;
             }
         });
 
-        self.log_line("    [streaming] calling execute_streaming...").await;
+        self.log_line("    [streaming] calling execute_streaming...")
+            .await;
         let exit_code = self.host.execute_streaming(cmd, line_tx).await?;
-        self.log_line(&format!("    [streaming] execute_streaming returned exit={exit_code}")).await;
+        self.log_line(&format!(
+            "    [streaming] execute_streaming returned exit={exit_code}"
+        ))
+        .await;
 
-        self.log_line("    [streaming] awaiting forward_handle...").await;
+        self.log_line("    [streaming] awaiting forward_handle...")
+            .await;
         let _ = forward_handle.await;
         self.log_line("    [streaming] forward_handle done").await;
 
@@ -228,15 +232,33 @@ impl<'a> LoggedSsh<'a> {
 /// sent to the TUI. The line is still logged to the build log file.
 fn is_noise_line(line: &str) -> bool {
     // SSH warnings
-    if line.starts_with("Warning: Permanently added") { return true; }
+    if line.starts_with("Warning: Permanently added") {
+        return true;
+    }
     // Shell env setup noise (from `source env.sh` with xtrace)
-    if line.starts_with("++ export PATH=") { return true; }
-    if line.starts_with("++ PATH=") { return true; }
-    if line.starts_with("++ set +o xtrace") { return true; }
-    if line.starts_with("++ unset ") { return true; }
-    if line.starts_with("++ case ") { return true; }
-    if line.starts_with("++++ dirname ") { return true; }
-    if line.starts_with("+++ readlink ") { return true; }
-    if line.starts_with("++ OMICRON_WS=") { return true; }
+    if line.starts_with("++ export PATH=") {
+        return true;
+    }
+    if line.starts_with("++ PATH=") {
+        return true;
+    }
+    if line.starts_with("++ set +o xtrace") {
+        return true;
+    }
+    if line.starts_with("++ unset ") {
+        return true;
+    }
+    if line.starts_with("++ case ") {
+        return true;
+    }
+    if line.starts_with("++++ dirname ") {
+        return true;
+    }
+    if line.starts_with("+++ readlink ") {
+        return true;
+    }
+    if line.starts_with("++ OMICRON_WS=") {
+        return true;
+    }
     false
 }

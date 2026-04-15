@@ -30,10 +30,7 @@ pub enum AppEvent {
     /// Alert
     Alert { severity: Severity, message: String },
     /// Async SSH connection completed
-    Connected {
-        address: String,
-        host: Arc<SshHost>,
-    },
+    Connected { address: String, host: Arc<SshHost> },
     /// GitHub API fetch completed for git ref selector
     GitRefsFetched {
         repo_url: String,
@@ -51,10 +48,7 @@ pub enum AppEvent {
     /// Prerequisite checks completed
     PrereqsChecked(crate::ops::prereqs::PrereqResults),
     /// ISO download progress update
-    DownloadProgress {
-        filename: String,
-        percent: f32,
-    },
+    DownloadProgress { filename: String, percent: f32 },
     /// Proxmox VM list query completed
     ProxmoxVmList {
         name: String,
@@ -98,11 +92,19 @@ pub enum BuildEvent {
     StepCompleted(String),
     StepFailed(String, String),
     /// Build discovered the VM's actual IP (may differ from config)
-    HostDiscovered { address: String, ssh_user: String },
+    HostDiscovered {
+        address: String,
+        ssh_user: String,
+    },
     /// Total crate count discovered via cargo tree (for percentage display)
-    CrateCount { step_id: String, total: u32 },
+    CrateCount {
+        step_id: String,
+        total: u32,
+    },
     /// Build pipeline finished (success or failure)
-    PipelineFinished { success: bool },
+    PipelineFinished {
+        success: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

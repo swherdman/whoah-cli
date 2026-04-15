@@ -1,8 +1,10 @@
 use std::fs;
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 
-use super::loader::{deployment_dir, deployments_dir, hypervisors_dir, load_global_config, whoah_dir};
+use super::loader::{
+    deployment_dir, deployments_dir, hypervisors_dir, load_global_config, whoah_dir,
+};
 use super::types::*;
 
 pub fn create_deployment(name: &str, config: &DeploymentConfig) -> Result<()> {
@@ -107,7 +109,10 @@ pub fn update_deployment_field(
                     arr.push(trimmed);
                 }
             }
-            table.insert(field_name, toml_edit::Item::Value(toml_edit::Value::Array(arr)));
+            table.insert(
+                field_name,
+                toml_edit::Item::Value(toml_edit::Value::Array(arr)),
+            );
         } else {
             table.insert(field_name, toml_edit::value(value));
         }
@@ -174,9 +179,15 @@ pub fn update_deployment_field(
 /// Validate that TOML content deserializes into the expected config type.
 fn validate_config_contents(file: &str, contents: &str) -> Result<()> {
     match file {
-        "deployment" => { toml::from_str::<DeploymentToml>(contents)?; }
-        "build" => { toml::from_str::<BuildToml>(contents)?; }
-        "monitoring" => { toml::from_str::<MonitoringToml>(contents)?; }
+        "deployment" => {
+            toml::from_str::<DeploymentToml>(contents)?;
+        }
+        "build" => {
+            toml::from_str::<BuildToml>(contents)?;
+        }
+        "monitoring" => {
+            toml::from_str::<MonitoringToml>(contents)?;
+        }
         _ => {}
     }
     Ok(())
@@ -229,8 +240,8 @@ pub fn migrate_deployment(old_name: &str, new_name: &str) -> Result<()> {
 /// `path` is a dotted key like "credentials.host" or "proxmox.node".
 pub fn update_hypervisor_field(name: &str, path: &str, value: &str) -> Result<()> {
     let file_path = hypervisors_dir()?.join(format!("{name}.toml"));
-    let contents = fs::read_to_string(&file_path)
-        .map_err(|e| eyre!("Hypervisor '{name}' not found: {e}"))?;
+    let contents =
+        fs::read_to_string(&file_path).map_err(|e| eyre!("Hypervisor '{name}' not found: {e}"))?;
     let mut doc: toml_edit::DocumentMut = contents
         .parse()
         .map_err(|e| eyre!("Failed to parse {name}.toml: {e}"))?;
@@ -347,8 +358,14 @@ vdev_count = 3
 "#;
         let mut doc: toml_edit::DocumentMut = toml_str.parse().unwrap();
         let table = doc
-            .get_mut("omicron").unwrap().as_table_mut().unwrap()
-            .get_mut("overrides").unwrap().as_table_mut().unwrap();
+            .get_mut("omicron")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .get_mut("overrides")
+            .unwrap()
+            .as_table_mut()
+            .unwrap();
 
         // Check existing value is integer, write integer back
         assert!(table.get("vdev_count").unwrap().is_integer());
@@ -370,8 +387,14 @@ cores = 2
 "#;
         let mut doc: toml_edit::DocumentMut = toml_str.parse().unwrap();
         let table = doc
-            .get_mut("hypervisor").unwrap().as_table_mut().unwrap()
-            .get_mut("vm").unwrap().as_table_mut().unwrap();
+            .get_mut("hypervisor")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .get_mut("vm")
+            .unwrap()
+            .as_table_mut()
+            .unwrap();
         table.insert("cores", toml_edit::value(4_i64));
 
         let result = doc.to_string();
@@ -392,7 +415,11 @@ instance_pool_range = { first = "192.168.2.81", last = "192.168.2.90" }
         // Navigate: network (Table) → internal_services_range (InlineTable) → first
         let network = doc.get_mut("network").unwrap().as_table_mut().unwrap();
         let range_item = network.get_mut("internal_services_range").unwrap();
-        let range = range_item.as_value_mut().unwrap().as_inline_table_mut().unwrap();
+        let range = range_item
+            .as_value_mut()
+            .unwrap()
+            .as_inline_table_mut()
+            .unwrap();
         range.insert("first", toml_edit::Value::from("10.0.0.1"));
 
         let result = doc.to_string();
@@ -442,11 +469,7 @@ disk_storage = "local-lvm"
 iso_file = "helios.iso"
 "#;
         let mut doc: toml_edit::DocumentMut = toml_str.parse().unwrap();
-        let table = doc
-            .get_mut("credentials")
-            .unwrap()
-            .as_table_mut()
-            .unwrap();
+        let table = doc.get_mut("credentials").unwrap().as_table_mut().unwrap();
         table.insert("host", toml_edit::value("192.168.2.5"));
 
         let result = doc.to_string();

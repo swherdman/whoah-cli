@@ -7,7 +7,7 @@
 //! Replaces the older `import.rs` which used `RemoteHost` trait.
 //! See docs/BACKLOG.md for deprecation plan.
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 
 use crate::config::types::*;
 use crate::ssh::oneshot;
@@ -34,9 +34,7 @@ pub async fn discover_config(host: &str, user: &str, port: u16) -> Result<Discov
         "cat ~/omicron/smf/sled-agent/non-gimlet/config-rss.toml 2>/dev/null",
     )
     .await
-    .map_err(|_| {
-        eyre!("Could not read config-rss.toml — is ~/omicron present on {host}?")
-    })?;
+    .map_err(|_| eyre!("Could not read config-rss.toml — is ~/omicron present on {host}?"))?;
 
     let network = parse_network_from_rss(&rss_contents)?;
 
@@ -100,8 +98,8 @@ pub async fn discover_config(host: &str, user: &str, port: u16) -> Result<Discov
 
 /// Parse network config from config-rss.toml contents.
 pub fn parse_network_from_rss(contents: &str) -> Result<NetworkConfig> {
-    let table: toml::Value = toml::from_str(contents)
-        .map_err(|e| eyre!("Failed to parse config-rss.toml: {e}"))?;
+    let table: toml::Value =
+        toml::from_str(contents).map_err(|e| eyre!("Failed to parse config-rss.toml: {e}"))?;
 
     let gateway = table
         .get("rack_network_config")
@@ -227,10 +225,7 @@ pub fn parse_network_from_rss(contents: &str) -> Result<NetworkConfig> {
 
 /// Count vdev entries in config.toml.
 pub fn count_vdevs(contents: &str) -> u32 {
-    contents
-        .lines()
-        .filter(|l| l.contains(".vdev"))
-        .count() as u32
+    contents.lines().filter(|l| l.contains(".vdev")).count() as u32
 }
 
 /// Parse a u32 constant from a Rust source grep result.
@@ -297,10 +292,7 @@ addresses = [{address = "192.168.2.30/24"}]
         assert_eq!(net.internal_services_range.last, "192.168.2.49");
         assert_eq!(net.infra_ip, "192.168.2.50");
         assert_eq!(net.external_dns_zone_name.as_deref(), Some("oxide.test"));
-        assert_eq!(
-            net.rack_subnet.as_deref(),
-            Some("fd00:1122:3344:0100::/56")
-        );
+        assert_eq!(net.rack_subnet.as_deref(), Some("fd00:1122:3344:0100::/56"));
     }
 
     #[test]

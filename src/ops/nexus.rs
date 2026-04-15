@@ -1,4 +1,4 @@
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use serde::Serialize;
 
 use crate::config::types::NexusConfig;
@@ -239,8 +239,8 @@ pub async fn check_quotas(
         return Err(CheckError::Unreachable);
     }
 
-    let json: serde_json::Value = serde_json::from_str(&response.body)
-        .map_err(|e| CheckError::ParseError(e.to_string()))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&response.body).map_err(|e| CheckError::ParseError(e.to_string()))?;
 
     let cpus = json["cpus"].as_u64().unwrap_or(0);
     let memory = json["memory"].as_u64().unwrap_or(0);
@@ -288,8 +288,8 @@ pub async fn check_ip_pool(
         return Err(CheckError::Unreachable);
     }
 
-    let json: serde_json::Value = serde_json::from_str(&response.body)
-        .map_err(|e| CheckError::ParseError(e.to_string()))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&response.body).map_err(|e| CheckError::ParseError(e.to_string()))?;
 
     if let Some(pools) = json["items"].as_array() {
         for pool in pools {
@@ -307,10 +307,7 @@ pub async fn check_ip_pool(
 // --- Change functions (apply desired state) ---
 
 /// Set silo quotas to the values from config.
-pub async fn set_quotas(
-    client: &mut NexusClient<'_>,
-    config: &NexusConfig,
-) -> Result<()> {
+pub async fn set_quotas(client: &mut NexusClient<'_>, config: &NexusConfig) -> Result<()> {
     let path = format!("v1/system/silos/{}/quotas", config.silo_name);
     let body = format!(
         "{{\"cpus\":{},\"memory\":{},\"storage\":{}}}",
@@ -359,10 +356,7 @@ pub async fn create_ip_pool(
 
     // Step 2: Link pool to silo as default
     let link_path = format!("v1/system/ip-pools/{}/silos", config.ip_pool_name);
-    let link_body = format!(
-        "{{\"silo\":\"{}\",\"is_default\":true}}",
-        config.silo_name
-    );
+    let link_body = format!("{{\"silo\":\"{}\",\"is_default\":true}}", config.silo_name);
     let response = client.post(&link_path, &link_body).await?;
     if !response.is_ok() && response.status != 409 {
         return Err(eyre!(
@@ -374,9 +368,7 @@ pub async fn create_ip_pool(
 
     // Step 3: Add IP range
     let range_path = format!("v1/ip-pools/{}/ranges/add", config.ip_pool_name);
-    let range_body = format!(
-        "{{\"first\":\"{pool_range_first}\",\"last\":\"{pool_range_last}\"}}"
-    );
+    let range_body = format!("{{\"first\":\"{pool_range_first}\",\"last\":\"{pool_range_last}\"}}");
     let response = client.post(&range_path, &range_body).await?;
     if !response.is_ok() && response.status != 409 {
         return Err(eyre!(

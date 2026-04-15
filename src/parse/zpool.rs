@@ -1,4 +1,4 @@
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -26,19 +26,23 @@ pub fn parse_zpool_list(output: &str) -> Result<Vec<ZpoolInfo>> {
             continue;
         }
         let frag = fields[6].trim_end_matches('%');
-        let fragmentation_pct = if frag == "-" {
-            None
-        } else {
-            frag.parse().ok()
-        };
+        let fragmentation_pct = if frag == "-" { None } else { frag.parse().ok() };
 
         pools.push(ZpoolInfo {
             name: fields[0].to_string(),
-            size_bytes: fields[1].parse().map_err(|_| eyre!("bad size: {}", fields[1]))?,
-            allocated_bytes: fields[2].parse().map_err(|_| eyre!("bad alloc: {}", fields[2]))?,
-            free_bytes: fields[3].parse().map_err(|_| eyre!("bad free: {}", fields[3]))?,
+            size_bytes: fields[1]
+                .parse()
+                .map_err(|_| eyre!("bad size: {}", fields[1]))?,
+            allocated_bytes: fields[2]
+                .parse()
+                .map_err(|_| eyre!("bad alloc: {}", fields[2]))?,
+            free_bytes: fields[3]
+                .parse()
+                .map_err(|_| eyre!("bad free: {}", fields[3]))?,
             fragmentation_pct,
-            capacity_pct: fields[7].parse().map_err(|_| eyre!("bad cap: {}", fields[7]))?,
+            capacity_pct: fields[7]
+                .parse()
+                .map_err(|_| eyre!("bad cap: {}", fields[7]))?,
             health: fields[9].to_string(),
         });
     }
@@ -54,7 +58,10 @@ pub fn parse_rpool(output: &str) -> Result<Option<ZpoolInfo>> {
 /// Filter to oxp_ pools only.
 pub fn parse_oxp_pools(output: &str) -> Result<Vec<ZpoolInfo>> {
     let pools = parse_zpool_list(output)?;
-    Ok(pools.into_iter().filter(|p| p.name.starts_with("oxp_")).collect())
+    Ok(pools
+        .into_iter()
+        .filter(|p| p.name.starts_with("oxp_"))
+        .collect())
 }
 
 #[cfg(test)]

@@ -242,9 +242,7 @@ pub fn build_deploy_pipeline() -> Pipeline {
             ),
             Phase::new(
                 "Cache Setup",
-                vec![
-                    Step::new("cache-start", "Start caching proxies"),
-                ],
+                vec![Step::new("cache-start", "Start caching proxies")],
             ),
             Phase::new(
                 "OS Setup",
@@ -359,5 +357,4 @@ mod tests {
         assert_eq!(p.find_step("deploy-verify"), Some((6, 2)));
         assert_eq!(p.find_step("nonexistent"), None);
     }
-
 }

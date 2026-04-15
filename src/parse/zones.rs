@@ -257,9 +257,18 @@ mod tests {
         let zones = parse_zoneadm_list(REAL_OUTPUT).unwrap();
         assert_eq!(zones.len(), 9); // 10 lines minus global
 
-        let services: Vec<_> = zones.iter().filter(|z| z.kind == ZoneKind::Service).collect();
-        let instances: Vec<_> = zones.iter().filter(|z| z.kind == ZoneKind::Instance).collect();
-        let infra: Vec<_> = zones.iter().filter(|z| z.kind == ZoneKind::Infrastructure).collect();
+        let services: Vec<_> = zones
+            .iter()
+            .filter(|z| z.kind == ZoneKind::Service)
+            .collect();
+        let instances: Vec<_> = zones
+            .iter()
+            .filter(|z| z.kind == ZoneKind::Instance)
+            .collect();
+        let infra: Vec<_> = zones
+            .iter()
+            .filter(|z| z.kind == ZoneKind::Infrastructure)
+            .collect();
 
         assert_eq!(services.len(), 6);
         assert_eq!(instances.len(), 1);

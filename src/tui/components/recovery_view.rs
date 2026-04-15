@@ -1,7 +1,9 @@
 use std::time::{Duration, Instant};
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 
 use crate::action::Action;
 use crate::ops::recover::{RecoveryEvent, RecoveryStep};
@@ -213,8 +215,8 @@ impl Component for RecoveryView {
             p.yellow_warn
         };
 
-        let progress_area = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-            .split(chunks[0]);
+        let progress_area =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(chunks[0]);
 
         frame.render_widget(
             Paragraph::new(eta_text).style(Style::default().fg(bar_color)),
@@ -227,10 +229,7 @@ impl Component for RecoveryView {
         let mut step_lines: Vec<Line> = Vec::new();
         for info in &self.steps {
             let (icon, style) = match info.state {
-                StepState::Pending => (
-                    "  ",
-                    Style::default().fg(p.text_disabled),
-                ),
+                StepState::Pending => ("  ", Style::default().fg(p.text_disabled)),
                 StepState::Running => (
                     ">>",
                     Style::default()
@@ -285,9 +284,15 @@ impl Component for RecoveryView {
         frame.render_widget(output_block, chunks[2]);
 
         let total_lines = self.output_lines.len();
-        let output_lines: Vec<Line> = self.output_lines
+        let output_lines: Vec<Line> = self
+            .output_lines
             .iter()
-            .map(|l| Line::from(Span::styled(l.as_str(), Style::default().fg(p.text_secondary))))
+            .map(|l| {
+                Line::from(Span::styled(
+                    l.as_str(),
+                    Style::default().fg(p.text_secondary),
+                ))
+            })
             .collect();
 
         frame.render_widget(
@@ -298,8 +303,8 @@ impl Component for RecoveryView {
         // Scrollbar for output pane
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(p.border_default));
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(self.output_scroll as usize);
+        let mut scrollbar_state =
+            ScrollbarState::new(total_lines).position(self.output_scroll as usize);
         frame.render_stateful_widget(scrollbar, output_inner, &mut scrollbar_state);
 
         // Error display

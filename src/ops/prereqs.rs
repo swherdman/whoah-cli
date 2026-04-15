@@ -43,10 +43,7 @@ pub async fn check_all() -> PrereqResults {
 /// Check if Docker is installed and the daemon is running.
 async fn check_docker() -> PrereqStatus {
     // Check if docker binary exists
-    let version = Command::new("docker")
-        .arg("--version")
-        .output()
-        .await;
+    let version = Command::new("docker").arg("--version").output().await;
 
     match version {
         Ok(out) if out.status.success() => {}

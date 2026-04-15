@@ -4,9 +4,7 @@ use color_eyre::Result;
 use tokio_util::sync::CancellationToken;
 
 use crate::config;
-use crate::ops::recover::{
-    run_recovery, RecoveryEvent, RecoveryParams, RecoveryStep,
-};
+use crate::ops::recover::{RecoveryEvent, RecoveryParams, RecoveryStep, run_recovery};
 use crate::ops::status::{gather_status, is_post_reboot};
 use crate::ssh::session::SshHost;
 
@@ -14,14 +12,9 @@ pub async fn run(deployment: Option<&str>) -> Result<()> {
     let deployment_name = config::resolve_deployment(deployment)?;
     let cfg = config::load_deployment(&deployment_name)?;
 
-    let host_config = cfg
-        .deployment
-        .hosts
-        .values()
-        .next()
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!("No hosts configured in deployment '{deployment_name}'")
-        })?;
+    let host_config = cfg.deployment.hosts.values().next().ok_or_else(|| {
+        color_eyre::eyre::eyre!("No hosts configured in deployment '{deployment_name}'")
+    })?;
 
     eprintln!(
         "Connecting to {}@{}...",
@@ -71,7 +64,7 @@ pub async fn run(deployment: Option<&str>) -> Result<()> {
         }
     );
 
-    if let Err(ref e) = result {
+    if let Err(e) = &result {
         eprintln!("\nRecovery failed: {e}");
         // TODO: prompt for workaround in interactive mode
     }
@@ -114,10 +107,7 @@ fn print_event(event: &RecoveryEvent) {
             }
         }
         RecoveryEvent::RecoveryComplete(duration) => {
-            eprintln!(
-                "\nRecovery complete in {:.0}s",
-                duration.as_secs_f64()
-            );
+            eprintln!("\nRecovery complete in {:.0}s", duration.as_secs_f64());
         }
     }
 }

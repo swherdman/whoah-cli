@@ -76,20 +76,19 @@ fn parse_download_line(line: &str) -> Option<PkgEvent> {
     let items_total: u32 = items_total.parse().ok()?;
 
     // Parse MB: "83.6/238.8MB"
-    let mb_part = after_colon.split_whitespace()
-        .find(|s| s.ends_with("MB"))?;
+    let mb_part = after_colon.split_whitespace().find(|s| s.ends_with("MB"))?;
     let mb_str = mb_part.strip_suffix("MB")?;
     let (mb_done_str, mb_total_str) = mb_str.split_once('/')?;
     let mb_done: f32 = mb_done_str.parse().ok()?;
     let mb_total: f32 = mb_total_str.parse().ok()?;
 
     // Parse percent: "35%"
-    let pct_part = after_colon.split_whitespace()
-        .find(|s| s.ends_with('%'))?;
+    let pct_part = after_colon.split_whitespace().find(|s| s.ends_with('%'))?;
     let pct: u32 = pct_part.strip_suffix('%')?.parse().ok()?;
 
     // Parse speed (optional): "(16.8M/s)"
-    let speed = after_colon.split('(')
+    let speed = after_colon
+        .split('(')
         .nth(1)
         .and_then(|s| s.strip_suffix(')'))
         .map(|s| s.to_string());
@@ -145,28 +144,34 @@ mod tests {
     fn test_parse_download_with_speed() {
         let line = "Download: 1031/7134 items   83.6/238.8MB  35% complete (16.8M/s)";
         let event = parse_pkg_line(line).unwrap();
-        assert_eq!(event, PkgEvent::Download(PkgDownloadProgress {
-            items_done: 1031,
-            items_total: 7134,
-            mb_done: 83.6,
-            mb_total: 238.8,
-            pct: 35,
-            speed: Some("16.8M/s".into()),
-        }));
+        assert_eq!(
+            event,
+            PkgEvent::Download(PkgDownloadProgress {
+                items_done: 1031,
+                items_total: 7134,
+                mb_done: 83.6,
+                mb_total: 238.8,
+                pct: 35,
+                speed: Some("16.8M/s".into()),
+            })
+        );
     }
 
     #[test]
     fn test_parse_download_no_speed() {
         let line = "Download:    0/7134 items    0.0/238.8MB  0% complete ";
         let event = parse_pkg_line(line).unwrap();
-        assert_eq!(event, PkgEvent::Download(PkgDownloadProgress {
-            items_done: 0,
-            items_total: 7134,
-            mb_done: 0.0,
-            mb_total: 238.8,
-            pct: 0,
-            speed: None,
-        }));
+        assert_eq!(
+            event,
+            PkgEvent::Download(PkgDownloadProgress {
+                items_done: 0,
+                items_total: 7134,
+                mb_done: 0.0,
+                mb_total: 238.8,
+                pct: 0,
+                speed: None,
+            })
+        );
     }
 
     #[test]
@@ -180,10 +185,13 @@ mod tests {
     fn test_parse_actions() {
         let line = " Actions:    1/7672 actions (Installing new actions)";
         let event = parse_pkg_line(line).unwrap();
-        assert_eq!(event, PkgEvent::Actions(PkgActionProgress {
-            done: 1,
-            total: 7672,
-        }));
+        assert_eq!(
+            event,
+            PkgEvent::Actions(PkgActionProgress {
+                done: 1,
+                total: 7672,
+            })
+        );
     }
 
     #[test]
@@ -221,9 +229,12 @@ mod tests {
     #[test]
     fn test_format_download() {
         let event = PkgEvent::Download(PkgDownloadProgress {
-            items_done: 1031, items_total: 7134,
-            mb_done: 83.6, mb_total: 238.8,
-            pct: 35, speed: Some("16.8M/s".into()),
+            items_done: 1031,
+            items_total: 7134,
+            mb_done: 83.6,
+            mb_total: 238.8,
+            pct: 35,
+            speed: Some("16.8M/s".into()),
         });
         let s = format_pkg_event(&event);
         assert!(s.contains("1031/7134"));

@@ -41,9 +41,17 @@ pub enum PanelAction {
     /// Request async git ref fetch.
     FetchGitRefs { repo_url: String },
     /// Request SSH credential probe.
-    ProbeSsh { host: String, user: String, port: u16 },
+    ProbeSsh {
+        host: String,
+        user: String,
+        port: u16,
+    },
     /// Request Proxmox config validation.
-    ValidateProxmox { host: String, user: String, port: u16 },
+    ValidateProxmox {
+        host: String,
+        user: String,
+        port: u16,
+    },
     /// Request ISO download to Proxmox host.
     DownloadIso {
         host: String,
@@ -276,18 +284,12 @@ pub fn render_input_line<'a>(input: &Input, label: &str, palette: &Palette) -> L
     let after = &rest[after_start..];
 
     Line::from(vec![
-        Span::styled(
-            format!("{label}: "),
-            Style::default().fg(p.green_primary),
-        ),
+        Span::styled(format!("{label}: "), Style::default().fg(p.green_primary)),
         Span::styled(
             before.to_string(),
             Style::default().fg(p.text_bright).bg(p.bg_hover),
         ),
-        Span::styled(
-            cursor_str,
-            Style::default().fg(p.bg_base).bg(p.text_bright),
-        ),
+        Span::styled(cursor_str, Style::default().fg(p.bg_base).bg(p.text_bright)),
         Span::styled(
             after.to_string(),
             Style::default().fg(p.text_bright).bg(p.bg_hover),
@@ -382,11 +384,11 @@ mod tests {
     /// Build a test line set: header, editable, field (readonly), editable, header, action
     fn test_lines() -> Vec<DetailLine> {
         let mut lines = Vec::new();
-        push_header(&mut lines, "SECTION");       // 0: spacer, 1: header
+        push_header(&mut lines, "SECTION"); // 0: spacer, 1: header
         push_editable(&mut lines, "a", "1", "f", "a"); // 2
-        push_field(&mut lines, "b", "2");               // 3 (readonly)
+        push_field(&mut lines, "b", "2"); // 3 (readonly)
         push_editable(&mut lines, "c", "3", "f", "c"); // 4
-        push_header(&mut lines, "SECTION2");       // 5: spacer, 6: header
+        push_header(&mut lines, "SECTION2"); // 5: spacer, 6: header
         push_danger_action(&mut lines, "Delete", LineAction::DeleteHypervisor); // 7: spacer, 8: action
         lines
     }

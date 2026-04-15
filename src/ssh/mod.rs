@@ -25,11 +25,7 @@ pub trait RemoteHost: Send + Sync {
 
     /// Execute a command and stream stdout lines through the channel.
     /// Returns exit code when command completes.
-    async fn execute_streaming(
-        &self,
-        cmd: &str,
-        tx: mpsc::Sender<String>,
-    ) -> Result<i32>;
+    async fn execute_streaming(&self, cmd: &str, tx: mpsc::Sender<String>) -> Result<i32>;
 
     /// Hostname or address of this host.
     fn hostname(&self) -> &str;

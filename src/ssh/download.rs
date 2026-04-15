@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use russh::ChannelMsg;
 use tokio::sync::mpsc;
 
@@ -97,9 +97,7 @@ pub async fn download_remote(
         return Err(eyre!("Download failed (exit code {code})"));
     }
 
-    let _ = progress_tx
-        .send(DownloadProgress { percent: 100.0 })
-        .await;
+    let _ = progress_tx.send(DownloadProgress { percent: 100.0 }).await;
 
     Ok(())
 }

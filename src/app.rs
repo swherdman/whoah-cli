@@ -11,14 +11,16 @@ use crate::config::DeploymentConfig;
 use crate::event::{AppEvent, Event, Severity};
 use crate::git::RefCache;
 use crate::ops::pipeline::{self, Pipeline};
+use crate::ops::recover::{RecoveryEvent, RecoveryParams, run_recovery};
+use crate::ops::status::gather_status;
 use crate::parse::cargo_progress::{self, CargoTracker};
 use crate::parse::omicron_pkg_log::{self, OmicronPkgTracker};
 use crate::parse::pkg_progress;
 use crate::parse::xtask_download::{self, XtaskTracker};
-use crate::ops::recover::{run_recovery, RecoveryEvent, RecoveryParams};
-use crate::ops::status::gather_status;
-use crate::ssh::session::SshHost;
 use crate::ssh::RemoteHost;
+use crate::ssh::session::SshHost;
+use crate::tui::Tui;
+use crate::tui::components::Component;
 use crate::tui::components::alert_bar::AlertBar;
 use crate::tui::components::build_view::BuildView;
 use crate::tui::components::config_view::ConfigView;
@@ -28,10 +30,8 @@ use crate::tui::components::log_panel::LogPanel;
 use crate::tui::components::recovery_view::RecoveryView;
 use crate::tui::components::status_bar::StatusBarComponent;
 use crate::tui::components::status_panel::StatusPanel;
-use crate::tui::components::Component;
 use crate::tui::layout::dashboard_layout;
 use crate::tui::theme::Palette;
-use crate::tui::Tui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MonitorMode {
@@ -89,7 +89,12 @@ pub struct App {
 impl App {
     pub fn new(config: DeploymentConfig, deployment_name: String, demo: bool) -> Self {
         let thresholds = config.monitoring.thresholds.clone();
-        let vdev_size = config.build.omicron.overrides.vdev_size_bytes.unwrap_or(42949672960);
+        let vdev_size = config
+            .build
+            .omicron
+            .overrides
+            .vdev_size_bytes
+            .unwrap_or(42949672960);
         Self {
             config,
             deployment_name: deployment_name.clone(),
@@ -142,7 +147,12 @@ impl App {
                 let status = crate::ops::demo::demo_status(&self.config);
                 let _ = tx.send(Event::App(AppEvent::StatusUpdated(Box::new(status))));
             }
-            let address = self.config.deployment.hosts.values().next()
+            let address = self
+                .config
+                .deployment
+                .hosts
+                .values()
+                .next()
                 .map(|h| h.address.as_str())
                 .unwrap_or("192.168.2.100");
             self.status_bar.set_connected(address);
@@ -189,7 +199,11 @@ impl App {
             }
         };
 
-        tracing::info!("Connecting to {}@{}...", host_config.ssh_user, host_config.address);
+        tracing::info!(
+            "Connecting to {}@{}...",
+            host_config.ssh_user,
+            host_config.address
+        );
 
         match SshHost::connect(&host_config).await {
             Ok(host) => {
@@ -199,10 +213,8 @@ impl App {
             }
             Err(e) => {
                 tracing::error!("Connection failed: {e}");
-                self.alert_bar.set_alert(
-                    Severity::Critical,
-                    format!("SSH connection failed: {e}"),
-                );
+                self.alert_bar
+                    .set_alert(Severity::Critical, format!("SSH connection failed: {e}"));
             }
         }
     }
@@ -301,7 +313,9 @@ impl App {
                 KeyCode::Esc => EventResult::Ignored, // falls through to global quit
                 KeyCode::Tab => EventResult::Consumed(Some(Action::FocusNext)),
                 KeyCode::BackTab => EventResult::Consumed(Some(Action::FocusPrev)),
-                KeyCode::Char('j') | KeyCode::Down => EventResult::Consumed(Some(Action::ScrollDown)),
+                KeyCode::Char('j') | KeyCode::Down => {
+                    EventResult::Consumed(Some(Action::ScrollDown))
+                }
                 KeyCode::Char('k') | KeyCode::Up => EventResult::Consumed(Some(Action::ScrollUp)),
                 KeyCode::Char('s') => EventResult::Consumed(Some(Action::RefreshStatus)),
                 KeyCode::Char('r') => EventResult::Consumed(Some(Action::StartRecovery)),
@@ -313,7 +327,9 @@ impl App {
                     self.recovery_view.deactivate();
                     EventResult::Consumed(None)
                 }
-                KeyCode::Char('j') | KeyCode::Down => EventResult::Consumed(Some(Action::ScrollDown)),
+                KeyCode::Char('j') | KeyCode::Down => {
+                    EventResult::Consumed(Some(Action::ScrollDown))
+                }
                 KeyCode::Char('k') | KeyCode::Up => EventResult::Consumed(Some(Action::ScrollUp)),
                 _ => EventResult::Ignored,
             },
@@ -362,8 +378,7 @@ impl App {
                 }
             }
             ConfigViewEvent::RequestActivation { name } => {
-                let build_running =
-                    self.pipeline.started.is_some() && !self.pipeline.is_complete();
+                let build_running = self.pipeline.started.is_some() && !self.pipeline.is_complete();
                 let recovery_running = self.recovery_view.is_active();
 
                 if name != self.deployment_name && (build_running || recovery_running) {
@@ -377,8 +392,13 @@ impl App {
                         self.status_bar.set_deployment(&name);
                         self.needs_reconnect = true;
                         let thresholds = self.config.monitoring.thresholds.clone();
-                        let vdev_size = self.config.build.omicron.overrides
-                            .vdev_size_bytes.unwrap_or(42949672960);
+                        let vdev_size = self
+                            .config
+                            .build
+                            .omicron
+                            .overrides
+                            .vdev_size_bytes
+                            .unwrap_or(42949672960);
                         self.disk_panel = DiskPanel::new(thresholds, vdev_size);
                         self.status_panel = StatusPanel::new();
                         tracing::info!("Switched active deployment to {name}");
@@ -398,19 +418,45 @@ impl App {
                 self.spawn_proxmox_validation(&host, &user, port);
                 EventResult::Consumed(None)
             }
-            ConfigViewEvent::DownloadIso { host, user, port, iso_storage_path, filename } => {
+            ConfigViewEvent::DownloadIso {
+                host,
+                user,
+                port,
+                iso_storage_path,
+                filename,
+            } => {
                 self.spawn_iso_download(&host, &user, port, &iso_storage_path, &filename);
                 EventResult::Consumed(None)
             }
-            ConfigViewEvent::ListProxmoxVms { name, host, user, port, hypervisor_ref, import } => {
+            ConfigViewEvent::ListProxmoxVms {
+                name,
+                host,
+                user,
+                port,
+                hypervisor_ref,
+                import,
+            } => {
                 self.spawn_list_proxmox_vms(&name, &host, &user, port, &hypervisor_ref, import);
                 EventResult::Consumed(None)
             }
-            ConfigViewEvent::QueryProxmoxVmConfig { name, host, user, port, hypervisor_ref, vmid } => {
+            ConfigViewEvent::QueryProxmoxVmConfig {
+                name,
+                host,
+                user,
+                port,
+                hypervisor_ref,
+                vmid,
+            } => {
                 self.spawn_query_proxmox_vm(&name, &host, &user, port, &hypervisor_ref, vmid);
                 EventResult::Consumed(None)
             }
-            ConfigViewEvent::DiscoverHost { name, host, user, port, hypervisor_ref } => {
+            ConfigViewEvent::DiscoverHost {
+                name,
+                host,
+                user,
+                port,
+                hypervisor_ref,
+            } => {
                 self.spawn_host_discovery(&name, &host, &user, port, hypervisor_ref.as_deref());
                 EventResult::Consumed(None)
             }
@@ -441,9 +487,7 @@ impl App {
             }
             Action::SwitchScreen(screen) => {
                 self.screen = screen;
-                if self.needs_reconnect
-                    && matches!(screen, Screen::Monitor | Screen::Build)
-                {
+                if self.needs_reconnect && matches!(screen, Screen::Monitor | Screen::Build) {
                     self.needs_reconnect = false;
                     // Disconnect old host
                     if let Some(host) = self.host.take() {
@@ -460,23 +504,23 @@ impl App {
                     FocusedPanel::Status => FocusedPanel::Disk,
                     FocusedPanel::Disk => FocusedPanel::Status,
                 };
-                self.status_panel.set_focused(self.focused == FocusedPanel::Status);
-                self.disk_panel.set_focused(self.focused == FocusedPanel::Disk);
+                self.status_panel
+                    .set_focused(self.focused == FocusedPanel::Status);
+                self.disk_panel
+                    .set_focused(self.focused == FocusedPanel::Disk);
             }
-            Action::ScrollUp | Action::ScrollDown => {
-                match self.screen {
-                    Screen::Monitor => match self.monitor_mode {
-                        MonitorMode::Recovery => self.recovery_view.update(&action),
-                        MonitorMode::Dashboard => match self.focused {
-                            FocusedPanel::Status => self.status_panel.update(&action),
-                            FocusedPanel::Disk => self.disk_panel.update(&action),
-                        },
+            Action::ScrollUp | Action::ScrollDown => match self.screen {
+                Screen::Monitor => match self.monitor_mode {
+                    MonitorMode::Recovery => self.recovery_view.update(&action),
+                    MonitorMode::Dashboard => match self.focused {
+                        FocusedPanel::Status => self.status_panel.update(&action),
+                        FocusedPanel::Disk => self.disk_panel.update(&action),
                     },
-                    Screen::Build => self.build_view.update(&action),
-                    Screen::Config => {}
-                    Screen::Debug => self.debug_view.update(&action),
-                }
-            }
+                },
+                Screen::Build => self.build_view.update(&action),
+                Screen::Config => {}
+                Screen::Debug => self.debug_view.update(&action),
+            },
             Action::RefreshStatus => {
                 tracing::info!("Manual status refresh...");
                 self.spawn_status_poll();
@@ -517,10 +561,7 @@ impl App {
                         tracing::error!("Recovery: {} FAILED: {}", step.label(), error);
                     }
                     RecoveryEvent::RecoveryComplete(dur) => {
-                        tracing::info!(
-                            "Recovery complete in {:.0}s",
-                            dur.as_secs_f64()
-                        );
+                        tracing::info!("Recovery complete in {:.0}s", dur.as_secs_f64());
                         // Trigger a status refresh after recovery
                         self.spawn_status_poll();
                     }
@@ -528,8 +569,10 @@ impl App {
                 }
             }
             Action::UpdateStatus(status) => {
-                self.status_panel.update(&Action::UpdateStatus(status.clone()));
-                self.disk_panel.update(&Action::UpdateStatus(status.clone()));
+                self.status_panel
+                    .update(&Action::UpdateStatus(status.clone()));
+                self.disk_panel
+                    .update(&Action::UpdateStatus(status.clone()));
 
                 // Check for alerts
                 if status.reboot_detected {
@@ -540,12 +583,16 @@ impl App {
                 } else {
                     // Check thresholds
                     if let Some(rpool) = &status.disk.rpool {
-                        if rpool.capacity_pct >= self.config.monitoring.thresholds.rpool_critical_percent {
+                        if rpool.capacity_pct
+                            >= self.config.monitoring.thresholds.rpool_critical_percent
+                        {
                             self.alert_bar.set_alert(
                                 Severity::Critical,
                                 format!("rpool at {}% — critical!", rpool.capacity_pct),
                             );
-                        } else if rpool.capacity_pct >= self.config.monitoring.thresholds.rpool_warning_percent {
+                        } else if rpool.capacity_pct
+                            >= self.config.monitoring.thresholds.rpool_warning_percent
+                        {
                             self.alert_bar.set_alert(
                                 Severity::Warning,
                                 format!("rpool at {}% — approaching limit", rpool.capacity_pct),
@@ -559,7 +606,12 @@ impl App {
                 let status_summary = format!(
                     "Status: {} zones, rpool {}%",
                     status.zones.service_counts.values().sum::<u32>(),
-                    status.disk.rpool.as_ref().map(|r| r.capacity_pct).unwrap_or(0),
+                    status
+                        .disk
+                        .rpool
+                        .as_ref()
+                        .map(|r| r.capacity_pct)
+                        .unwrap_or(0),
                 );
                 if self.last_status_log.as_deref() != Some(&status_summary) {
                     tracing::info!("{status_summary}");
@@ -589,113 +641,185 @@ impl App {
                 tracing::info!("Connected to {address}");
                 self.spawn_status_poll();
             }
-            AppEvent::GitRefsFetched { repo_url, result } => {
-                match result {
-                    Ok(refs) => {
-                        self.git_ref_cache.insert(repo_url.clone(), refs.clone());
-                        self.config_view.deliver_data(
-                            crate::tui::components::config_detail::PanelData::GitRefs(refs.clone()),
-                        );
-                    }
-                    Err(msg) => {
-                        tracing::error!("Failed to fetch refs: {msg}");
-                        self.config_view.cancel_fetch();
-                    }
+            AppEvent::GitRefsFetched { repo_url, result } => match result {
+                Ok(refs) => {
+                    self.git_ref_cache.insert(repo_url.clone(), refs.clone());
+                    self.config_view.deliver_data(
+                        crate::tui::components::config_detail::PanelData::GitRefs(refs.clone()),
+                    );
                 }
-            }
-            AppEvent::SshProbeResult { host, user, port, status } => {
+                Err(msg) => {
+                    tracing::error!("Failed to fetch refs: {msg}");
+                    self.config_view.cancel_fetch();
+                }
+            },
+            AppEvent::SshProbeResult {
+                host,
+                user,
+                port,
+                status,
+            } => {
                 tracing::debug!("SSH probe {user}@{host}:{port}: {status:?}");
                 let follow_up = self.config_view.deliver_data(
                     crate::tui::components::config_detail::PanelData::SshProbeResult(*status),
                 );
                 // Chain: SSH valid → trigger Proxmox validation
-                if let Some(crate::tui::components::config_view::ConfigViewEvent::ValidateProxmox { host, user, port }) = follow_up {
+                if let Some(
+                    crate::tui::components::config_view::ConfigViewEvent::ValidateProxmox {
+                        host,
+                        user,
+                        port,
+                    },
+                ) = follow_up
+                {
                     self.spawn_proxmox_validation(&host, &user, port);
                 }
             }
-            AppEvent::DownloadProgress { filename: _, percent } => {
+            AppEvent::DownloadProgress {
+                filename: _,
+                percent,
+            } => {
                 self.config_view.deliver_data(
-                    crate::tui::components::config_detail::PanelData::DownloadProgress { percent: *percent },
+                    crate::tui::components::config_detail::PanelData::DownloadProgress {
+                        percent: *percent,
+                    },
                 );
             }
-            AppEvent::ProxmoxVmList { name, host, user, port, node: _, hypervisor_ref, import, result } => {
+            AppEvent::ProxmoxVmList {
+                name,
+                host,
+                user,
+                port,
+                node: _,
+                hypervisor_ref,
+                import,
+                result,
+            } => {
                 match result {
                     Ok(vms) => {
                         self.config_view.handle_proxmox_vm_list(
-                            name.clone(), host.clone(), user.clone(),
-                            hypervisor_ref.clone(), *import, vms.clone(),
+                            name.clone(),
+                            host.clone(),
+                            user.clone(),
+                            hypervisor_ref.clone(),
+                            *import,
+                            vms.clone(),
                         );
                     }
-                    Err(ref msg) => {
+                    Err(msg) => {
                         tracing::error!("Failed to list VMs: {msg}");
                         // Fall back to manual vmid entry
                         self.config_view.handle_proxmox_vm_list(
-                            name.clone(), host.clone(), user.clone(),
-                            hypervisor_ref.clone(), false, vec![],
+                            name.clone(),
+                            host.clone(),
+                            user.clone(),
+                            hypervisor_ref.clone(),
+                            false,
+                            vec![],
                         );
                     }
                 }
             }
-            AppEvent::ProxmoxVmConfig { name, host, user, port, hypervisor_ref, result } => {
+            AppEvent::ProxmoxVmConfig {
+                name,
+                host,
+                user,
+                port,
+                hypervisor_ref,
+                result,
+            } => {
                 match result {
                     Ok(vm_config) => {
                         self.config_view.handle_proxmox_vm_config(
-                            name.clone(), host.clone(), user.clone(),
-                            hypervisor_ref.clone(), vm_config.clone(),
+                            name.clone(),
+                            host.clone(),
+                            user.clone(),
+                            hypervisor_ref.clone(),
+                            vm_config.clone(),
                         );
                         // Also trigger host discovery for network/build config
                         self.spawn_host_discovery(
-                            name, host, user, *port, Some(hypervisor_ref.as_str()),
+                            name,
+                            host,
+                            user,
+                            *port,
+                            Some(hypervisor_ref.as_str()),
                         );
                     }
-                    Err(ref msg) => {
+                    Err(msg) => {
                         tracing::error!("Failed to query VM config: {msg}");
                     }
                 }
             }
-            AppEvent::HostDiscoveryResult { name, host, user, port: _, hypervisor_ref, result } => {
+            AppEvent::HostDiscoveryResult {
+                name,
+                host,
+                user,
+                port: _,
+                hypervisor_ref,
+                result,
+            } => {
                 match result {
                     Ok(discovered) => {
                         tracing::info!("Discovery complete for {user}@{host}");
                         self.config_view.create_discovered_deployment(
-                            name, host, user, hypervisor_ref.as_deref(), &discovered,
+                            name,
+                            host,
+                            user,
+                            hypervisor_ref.as_deref(),
+                            &discovered,
                         );
                     }
-                    Err(ref msg) => {
-                        tracing::error!("Discovery failed: {msg}. Deployment created with placeholder config.");
+                    Err(msg) => {
+                        tracing::error!(
+                            "Discovery failed: {msg}. Deployment created with placeholder config."
+                        );
                         // Placeholder deployment already exists — just reload the panel
                         self.config_view.reload_active_deployment();
                     }
                 }
             }
-            AppEvent::IsoDownloadResult { filename, result } => {
-                match result {
-                    Ok(()) => {
-                        tracing::info!("ISO download complete: {filename}");
-                        self.config_view.deliver_data(
-                            crate::tui::components::config_detail::PanelData::DownloadComplete,
-                        );
-                        if let Some((host, user, port)) = self.config_view.active_hypervisor_credentials() {
-                            self.spawn_proxmox_validation(&host, &user, port);
-                        }
-                    }
-                    Err(ref msg) => {
-                        tracing::error!("ISO download failed: {msg}");
-                        self.config_view.deliver_data(
-                            crate::tui::components::config_detail::PanelData::DownloadFailed(msg.clone()),
-                        );
+            AppEvent::IsoDownloadResult { filename, result } => match result {
+                Ok(()) => {
+                    tracing::info!("ISO download complete: {filename}");
+                    self.config_view.deliver_data(
+                        crate::tui::components::config_detail::PanelData::DownloadComplete,
+                    );
+                    if let Some((host, user, port)) =
+                        self.config_view.active_hypervisor_credentials()
+                    {
+                        self.spawn_proxmox_validation(&host, &user, port);
                     }
                 }
-            }
+                Err(msg) => {
+                    tracing::error!("ISO download failed: {msg}");
+                    self.config_view.deliver_data(
+                        crate::tui::components::config_detail::PanelData::DownloadFailed(
+                            msg.clone(),
+                        ),
+                    );
+                }
+            },
             AppEvent::ProxmoxValidated(validation) => {
-                tracing::debug!("Proxmox validation: node={:?} disk={:?} iso_storage={:?} iso_file={:?}",
-                    validation.node, validation.disk_storage, validation.iso_storage, validation.iso_file);
+                tracing::debug!(
+                    "Proxmox validation: node={:?} disk={:?} iso_storage={:?} iso_file={:?}",
+                    validation.node,
+                    validation.disk_storage,
+                    validation.iso_storage,
+                    validation.iso_file
+                );
                 self.config_view.deliver_data(
-                    crate::tui::components::config_detail::PanelData::ProxmoxValidation(validation.clone()),
+                    crate::tui::components::config_detail::PanelData::ProxmoxValidation(
+                        validation.clone(),
+                    ),
                 );
             }
             AppEvent::PrereqsChecked(results) => {
-                tracing::debug!("Prerequisites: docker={:?} gh={:?}", results.docker, results.gh);
+                tracing::debug!(
+                    "Prerequisites: docker={:?} gh={:?}",
+                    results.docker,
+                    results.gh
+                );
                 self.config_view.set_prereqs(results.clone());
             }
         }
@@ -705,7 +829,9 @@ impl App {
         use crate::event::BuildEvent;
         match event {
             BuildEvent::StepStarted(id) => {
-                let name = self.pipeline.find_step(id)
+                let name = self
+                    .pipeline
+                    .find_step(id)
                     .and_then(|(pi, si)| Some(self.pipeline.phases[pi].steps[si].name))
                     .unwrap_or("unknown");
                 self.pipeline.start_step(id);
@@ -750,7 +876,8 @@ impl App {
                         if let Some(event) = cargo_progress::parse_cargo_line(detail) {
                             self.cargo_tracker.update(&event);
                             Some(self.cargo_tracker.summary())
-                        } else if let Some(event) = omicron_pkg_log::parse_omicron_pkg_line(detail) {
+                        } else if let Some(event) = omicron_pkg_log::parse_omicron_pkg_line(detail)
+                        {
                             self.omicron_pkg_tracker.update(&event);
                             Some(self.omicron_pkg_tracker.summary())
                         } else {
@@ -791,7 +918,9 @@ impl App {
                 }
             }
             BuildEvent::StepCompleted(id) => {
-                let name = self.pipeline.find_step(id)
+                let name = self
+                    .pipeline
+                    .find_step(id)
                     .and_then(|(pi, si)| Some(self.pipeline.phases[pi].steps[si].name))
                     .unwrap_or("unknown");
                 self.pipeline.complete_step(id);
@@ -804,14 +933,19 @@ impl App {
                             duration: crate::ops::demo::realistic_duration(id),
                         };
                     }
-                    let cumulative: std::time::Duration = self.pipeline.phases.iter()
+                    let cumulative: std::time::Duration = self
+                        .pipeline
+                        .phases
+                        .iter()
                         .flat_map(|p| &p.steps)
                         .filter_map(|s| s.elapsed())
                         .sum();
                     self.pipeline.started = Some(std::time::Instant::now() - cumulative);
                 }
 
-                let dur = self.pipeline.step_mut(id)
+                let dur = self
+                    .pipeline
+                    .step_mut(id)
                     .and_then(|s| s.elapsed())
                     .unwrap_or_default();
                 tracing::info!("Build: {name} completed ({:.1}s)", dur.as_secs_f64());
@@ -820,7 +954,7 @@ impl App {
                 self.pipeline.fail_step(id, error.clone());
                 tracing::error!("Build: FAILED — {error}");
             }
-            BuildEvent::CrateCount { ref step_id, total } => {
+            BuildEvent::CrateCount { step_id, total } => {
                 tracing::info!("Crate count for {step_id}: {total}");
                 if step_id == "build-compile" {
                     self.cargo_tracker.set_estimated_total(*total);
@@ -840,7 +974,10 @@ impl App {
                     let dep_name = self.deployment_name.clone();
                     let path = format!("hosts.{host_name}.address");
                     if let Err(e) = crate::config::editor::update_deployment_field(
-                        &dep_name, "deployment", &path, address,
+                        &dep_name,
+                        "deployment",
+                        &path,
+                        address,
                     ) {
                         tracing::error!("Failed to persist discovered IP: {e}");
                     }
@@ -867,9 +1004,8 @@ impl App {
     }
 
     fn on_tick(&mut self) {
-        let interval = std::time::Duration::from_secs(
-            self.config.monitoring.polling.status_interval_secs,
-        );
+        let interval =
+            std::time::Duration::from_secs(self.config.monitoring.polling.status_interval_secs);
 
         let should_poll = match self.last_poll {
             Some(last) => last.elapsed() >= interval,
@@ -989,7 +1125,9 @@ impl App {
     }
 
     fn spawn_prereq_checks(&mut self) {
-        let Some(tx) = self.app_event_tx.clone() else { return };
+        let Some(tx) = self.app_event_tx.clone() else {
+            return;
+        };
         tokio::spawn(async move {
             let results = crate::ops::prereqs::check_all().await;
             let _ = tx.send(Event::App(AppEvent::PrereqsChecked(results)));
@@ -1020,15 +1158,20 @@ impl App {
         let host = host.to_string();
         let user = user.to_string();
         // We need the proxmox config to validate against. Read it from the active panel.
-        let proxmox_config = if let Some(panel) = self.config_view.active_hypervisor_proxmox_config() {
-            panel
-        } else {
-            return;
-        };
+        let proxmox_config =
+            if let Some(panel) = self.config_view.active_hypervisor_proxmox_config() {
+                panel
+            } else {
+                return;
+            };
         tokio::spawn(async move {
             let validation = crate::ops::hypervisor_proxmox_validate::validate_proxmox(
-                &host, &user, port, &proxmox_config,
-            ).await;
+                &host,
+                &user,
+                port,
+                &proxmox_config,
+            )
+            .await;
             let _ = tx.send(Event::App(AppEvent::ProxmoxValidated(validation)));
         });
     }
@@ -1042,31 +1185,46 @@ impl App {
         hypervisor_ref: &str,
         import: bool,
     ) {
-        let Some(tx) = self.app_event_tx.clone() else { return };
+        let Some(tx) = self.app_event_tx.clone() else {
+            return;
+        };
         let name = name.to_string();
         let host = host.to_string();
         let user = user.to_string();
         let hypervisor_ref = hypervisor_ref.to_string();
         // Get node name and credentials from hypervisor config
         let hyp = crate::config::loader::load_hypervisor(&hypervisor_ref).ok();
-        let node = hyp.as_ref()
+        let node = hyp
+            .as_ref()
             .and_then(|h| h.proxmox.as_ref().map(|p| p.node.clone()))
             .unwrap_or_else(|| "pve".into());
-        let hyp_host = hyp.as_ref()
+        let hyp_host = hyp
+            .as_ref()
             .map(|h| h.credentials.host.clone())
             .unwrap_or_else(|| host.clone());
-        let hyp_user = hyp.as_ref()
+        let hyp_user = hyp
+            .as_ref()
             .map(|h| h.credentials.ssh_user.clone())
             .unwrap_or_else(|| "root".into());
-        let hyp_port = hyp.as_ref()
+        let hyp_port = hyp
+            .as_ref()
             .map(|h| h.credentials.ssh_port())
             .unwrap_or(port);
         tokio::spawn(async move {
-            let result = crate::ops::hypervisor_proxmox_validate::list_vms(&hyp_host, &hyp_user, hyp_port, &node)
-                .await
-                .map_err(|e| e.to_string());
+            let result = crate::ops::hypervisor_proxmox_validate::list_vms(
+                &hyp_host, &hyp_user, hyp_port, &node,
+            )
+            .await
+            .map_err(|e| e.to_string());
             let _ = tx.send(Event::App(AppEvent::ProxmoxVmList {
-                name, host, user, port, node, hypervisor_ref, import, result,
+                name,
+                host,
+                user,
+                port,
+                node,
+                hypervisor_ref,
+                import,
+                result,
             }));
         });
     }
@@ -1080,22 +1238,28 @@ impl App {
         hypervisor_ref: &str,
         vmid: u32,
     ) {
-        let Some(tx) = self.app_event_tx.clone() else { return };
+        let Some(tx) = self.app_event_tx.clone() else {
+            return;
+        };
         let name = name.to_string();
         let host = host.to_string();
         let user = user.to_string();
         let hypervisor_ref = hypervisor_ref.to_string();
         let hyp = crate::config::loader::load_hypervisor(&hypervisor_ref).ok();
-        let node = hyp.as_ref()
+        let node = hyp
+            .as_ref()
             .and_then(|h| h.proxmox.as_ref().map(|p| p.node.clone()))
             .unwrap_or_else(|| "pve".into());
-        let hyp_host = hyp.as_ref()
+        let hyp_host = hyp
+            .as_ref()
             .map(|h| h.credentials.host.clone())
             .unwrap_or_else(|| host.clone());
-        let hyp_user = hyp.as_ref()
+        let hyp_user = hyp
+            .as_ref()
             .map(|h| h.credentials.ssh_user.clone())
             .unwrap_or_else(|| "root".into());
-        let hyp_port = hyp.as_ref()
+        let hyp_port = hyp
+            .as_ref()
             .map(|h| h.credentials.ssh_port())
             .unwrap_or(port);
         tokio::spawn(async move {
@@ -1105,7 +1269,12 @@ impl App {
             .await
             .map_err(|e| e.to_string());
             let _ = tx.send(Event::App(AppEvent::ProxmoxVmConfig {
-                name, host, user, port, hypervisor_ref, result,
+                name,
+                host,
+                user,
+                port,
+                hypervisor_ref,
+                result,
             }));
         });
     }
@@ -1141,7 +1310,14 @@ impl App {
         });
     }
 
-    fn spawn_iso_download(&mut self, host: &str, user: &str, port: u16, iso_storage_path: &str, filename: &str) {
+    fn spawn_iso_download(
+        &mut self,
+        host: &str,
+        user: &str,
+        port: u16,
+        iso_storage_path: &str,
+        filename: &str,
+    ) {
         let Some(event_tx) = self.app_event_tx.clone() else {
             return;
         };
@@ -1152,7 +1328,8 @@ impl App {
         tracing::info!("Starting ISO download: {filename} to {host}:{path}");
         tokio::spawn(async move {
             // Create a channel for progress updates
-            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<crate::ssh::download::DownloadProgress>(16);
+            let (progress_tx, mut progress_rx) =
+                tokio::sync::mpsc::channel::<crate::ssh::download::DownloadProgress>(16);
 
             // Forward progress events to the main event loop
             let event_tx_progress = event_tx.clone();
@@ -1167,7 +1344,12 @@ impl App {
             });
 
             let result = crate::ops::hypervisor_proxmox_validate::download_iso(
-                &host, &user, port, &path, &filename, progress_tx,
+                &host,
+                &user,
+                port,
+                &path,
+                &filename,
+                progress_tx,
             )
             .await
             .map_err(|e| e.to_string());
@@ -1175,10 +1357,7 @@ impl App {
             // Wait for progress forwarder to finish
             let _ = progress_forwarder.await;
 
-            let _ = event_tx.send(Event::App(AppEvent::IsoDownloadResult {
-                filename,
-                result,
-            }));
+            let _ = event_tx.send(Event::App(AppEvent::IsoDownloadResult { filename, result }));
         });
     }
 
@@ -1245,9 +1424,8 @@ impl App {
         let (build_tx, mut build_rx) = mpsc::unbounded_channel::<crate::event::BuildEvent>();
 
         tokio::spawn(async move {
-            let demo_handle = tokio::spawn(async move {
-                crate::ops::demo::run_demo(build_tx).await
-            });
+            let demo_handle =
+                tokio::spawn(async move { crate::ops::demo::run_demo(build_tx).await });
 
             while let Some(event) = build_rx.recv().await {
                 let _ = tx.send(Event::App(AppEvent::Build(event)));
@@ -1286,7 +1464,8 @@ impl App {
         ])
         .split(frame.area());
 
-        self.status_bar.render_tab_bar(frame, chrome[0], self.screen);
+        self.status_bar
+            .render_tab_bar(frame, chrome[0], self.screen);
         let config_editing = self.screen == Screen::Config && self.config_view.is_capturing();
         self.status_bar
             .render_keybindings(frame, chrome[2], self.screen, config_editing);
@@ -1303,8 +1482,7 @@ impl App {
     }
 
     fn render_build(&mut self, frame: &mut Frame, area: Rect) {
-        self.build_view
-            .render_pipeline(frame, area, &self.pipeline);
+        self.build_view.render_pipeline(frame, area, &self.pipeline);
     }
 
     fn render_config(&self, frame: &mut Frame, area: Rect) {
@@ -1328,8 +1506,7 @@ impl App {
             // Empty line — reserves space for alerts
             let p = Palette::default();
             frame.render_widget(
-                ratatui::widgets::Paragraph::new("")
-                    .style(Style::default().bg(p.bg_hover)),
+                ratatui::widgets::Paragraph::new("").style(Style::default().bg(p.bg_hover)),
                 areas.title_bar,
             );
         }

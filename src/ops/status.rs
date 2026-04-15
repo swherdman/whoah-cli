@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use color_eyre::Result;
 use serde::Serialize;
 
-use crate::config::types::derive_expected_zones;
 use crate::config::DeploymentConfig;
+use crate::config::types::derive_expected_zones;
 use crate::parse::{disk, network, services, zones, zpool};
 use crate::ssh::{CommandOutput, RemoteHost};
 
@@ -60,10 +60,7 @@ pub struct NetworkStatus {
 
 /// Gather complete status from a host.
 /// Runs status commands concurrently and parses their output.
-pub async fn gather_status(
-    host: &dyn RemoteHost,
-    config: &DeploymentConfig,
-) -> Result<HostStatus> {
+pub async fn gather_status(host: &dyn RemoteHost, config: &DeploymentConfig) -> Result<HostStatus> {
     let dns_ip = config
         .deployment
         .network
@@ -73,7 +70,8 @@ pub async fn gather_status(
         .unwrap_or_default();
 
     // Phase 1: resolve DNS first, then use result to find Nexus
-    let dns_cmd = format!("dig recovery.sys.oxide.test @{dns_ip} +short +time=3 +tries=1 2>/dev/null");
+    let dns_cmd =
+        format!("dig recovery.sys.oxide.test @{dns_ip} +short +time=3 +tries=1 2>/dev/null");
 
     // Run DNS + all non-Nexus commands concurrently
     let (zpool_result, zone_result, svcs_result, vdev_result, dns_result, simnet_result) = tokio::join!(
@@ -192,11 +190,7 @@ pub async fn gather_status(
     };
 
     let total_services: u32 = service_counts.values().sum();
-    let reboot_detected = is_post_reboot_from_parts(
-        simnets_exist,
-        total_services,
-        &baseline,
-    );
+    let reboot_detected = is_post_reboot_from_parts(simnets_exist, total_services, &baseline);
 
     Ok(HostStatus {
         hostname: host.hostname().to_string(),
@@ -290,7 +284,9 @@ pub fn format_status(status: &HostStatus, deployment_name: &str) -> String {
         .as_ref()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "not found".to_string());
-    out.push_str(&format!("  Services:  sled-agent: {sled}, baseline: {base}\n"));
+    out.push_str(&format!(
+        "  Services:  sled-agent: {sled}, baseline: {base}\n"
+    ));
 
     // Per-service zone counts
     // Collect all service names from both expected and actual
@@ -313,9 +309,7 @@ pub fn format_status(status: &HostStatus, deployment_name: &str) -> String {
             Some(exp) => format!("/{exp}"),
             None => String::new(),
         };
-        out.push_str(&format!(
-            "  {svc:<18} {actual}{expected_str}{marker}\n"
-        ));
+        out.push_str(&format!("  {svc:<18} {actual}{expected_str}{marker}\n"));
     }
 
     // Instances
@@ -324,7 +318,9 @@ pub fn format_status(status: &HostStatus, deployment_name: &str) -> String {
             .zones
             .zones
             .iter()
-            .filter(|z| z.kind == zones::ZoneKind::Instance && z.status == zones::ZoneStatus::Running)
+            .filter(|z| {
+                z.kind == zones::ZoneKind::Instance && z.status == zones::ZoneStatus::Running
+            })
             .map(|z| z.service_name.clone())
             .collect();
         out.push_str(&format!(
@@ -350,7 +346,10 @@ pub fn format_status(status: &HostStatus, deployment_name: &str) -> String {
                     }
                 })
                 .unwrap_or_else(|| pool.clone());
-            out.push_str(&format!("             {short_pool}: {}\n", zone_names.join(", ")));
+            out.push_str(&format!(
+                "             {short_pool}: {}\n",
+                zone_names.join(", ")
+            ));
         }
     }
 
@@ -368,9 +367,17 @@ pub fn format_status(status: &HostStatus, deployment_name: &str) -> String {
             .oxp_pools
             .iter()
             .map(|p| {
-                let short = p.name.strip_prefix("oxp_").map(|s| {
-                    if s.len() > 8 { format!("oxp_{}...", &s[..8]) } else { format!("oxp_{s}") }
-                }).unwrap_or_else(|| p.name.clone());
+                let short = p
+                    .name
+                    .strip_prefix("oxp_")
+                    .map(|s| {
+                        if s.len() > 8 {
+                            format!("oxp_{}...", &s[..8])
+                        } else {
+                            format!("oxp_{s}")
+                        }
+                    })
+                    .unwrap_or_else(|| p.name.clone());
                 format!("{short}: {}%", p.capacity_pct)
             })
             .collect();
@@ -382,11 +389,7 @@ pub fn format_status(status: &HostStatus, deployment_name: &str) -> String {
             .vdev_files
             .iter()
             .map(|v| {
-                let name = v
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&v.path);
+                let name = v.path.rsplit('/').next().unwrap_or(&v.path);
                 let gib = v.size_bytes as f64 / 1_073_741_824.0;
                 format!("{name}: {gib:.1} GiB")
             })
@@ -414,8 +417,8 @@ pub fn format_status(status: &HostStatus, deployment_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ssh::mock::MockHost;
     use crate::config::types::*;
+    use crate::ssh::mock::MockHost;
     use std::collections::BTreeMap;
 
     fn sample_config() -> DeploymentConfig {
@@ -427,13 +430,16 @@ mod tests {
                 },
                 hosts: {
                     let mut h = BTreeMap::new();
-                    h.insert("helios01".to_string(), HostConfig {
-                        address: "192.168.2.209".to_string(),
-                        ssh_user: "testuser".to_string(),
-                        role: HostRole::Combined,
-                        host_type: None,
-                        ssh_port: None,
-                    });
+                    h.insert(
+                        "helios01".to_string(),
+                        HostConfig {
+                            address: "192.168.2.209".to_string(),
+                            ssh_user: "testuser".to_string(),
+                            role: HostRole::Combined,
+                            host_type: None,
+                            ssh_port: None,
+                        },
+                    );
                     h
                 },
                 network: NetworkConfig {
@@ -507,7 +513,10 @@ mod tests {
     #[tokio::test]
     async fn test_gather_status_post_reboot() {
         let mut mock = MockHost::new("192.168.2.209");
-        mock.add_success("zpool list -Hp", "rpool\t267544698880\t82530148352\t185014550528\t-\t-\t25\t30\t1.00\tONLINE\t-\n");
+        mock.add_success(
+            "zpool list -Hp",
+            "rpool\t267544698880\t82530148352\t185014550528\t-\t-\t25\t30\t1.00\tONLINE\t-\n",
+        );
         mock.add_success("zoneadm list -cp", "0:global:running:/::\tipkg:shared\n");
         mock.add_success("svcs -H", "offline        svc:/system/sled-agent:default\n");
         mock.add_failure("ls -s /var/tmp", "No such file", 1);

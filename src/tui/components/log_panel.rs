@@ -13,8 +13,7 @@ pub struct LogPanel {
 impl LogPanel {
     pub fn new() -> Self {
         Self {
-            state: TuiWidgetState::new()
-                .set_default_display_level(log::LevelFilter::Info),
+            state: TuiWidgetState::new().set_default_display_level(log::LevelFilter::Info),
         }
     }
 }

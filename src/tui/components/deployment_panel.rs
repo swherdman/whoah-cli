@@ -9,14 +9,14 @@ use tui_input::backend::crossterm::EventHandler;
 use std::collections::HashMap;
 
 use super::config_detail::{
-    self, ConfigPanel, DetailLine, DetailStyle, PickerKind, PanelAction, PanelData, PanelEvent,
+    self, ConfigPanel, DetailLine, DetailStyle, PanelAction, PanelData, PanelEvent, PickerKind,
     push_editable, push_field, push_header, push_pickable, render_detail_lines,
 };
 use super::git_ref_selector::{GitRefSelector, SelectorAction};
 use crate::config::editor::update_deployment_field;
 use crate::config::loader::{load_deployment, load_deployment_state, load_hypervisor};
-use crate::ssh::probe::SshProbeStatus;
 use crate::config::types::{DeploymentConfig, DeploymentState, HypervisorConfig};
+use crate::ssh::probe::SshProbeStatus;
 use crate::tui::theme::Palette;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,11 +50,15 @@ impl ConfigTab {
 
 enum EditMode {
     Viewing,
-    Editing { input: Input },
+    Editing {
+        input: Input,
+    },
     /// Waiting for async git ref fetch.
     Fetching,
     /// Git ref selector popup.
-    GitRefSelect { selector: GitRefSelector },
+    GitRefSelect {
+        selector: GitRefSelector,
+    },
 }
 
 pub struct DeploymentPanel {
@@ -112,7 +116,8 @@ impl DeploymentPanel {
             if host.address.is_empty() {
                 continue;
             }
-            self.ssh_status.insert(name.clone(), SshProbeStatus::Checking);
+            self.ssh_status
+                .insert(name.clone(), SshProbeStatus::Checking);
             actions.push(PanelAction::ProbeSsh {
                 host: host.address.clone(),
                 user: host.ssh_user.clone(),
@@ -172,8 +177,7 @@ impl DeploymentPanel {
             .iter()
             .position(|t| *t == self.active_tab)
             .unwrap_or(0);
-        self.active_tab =
-            ConfigTab::ALL[(idx + ConfigTab::ALL.len() - 1) % ConfigTab::ALL.len()];
+        self.active_tab = ConfigTab::ALL[(idx + ConfigTab::ALL.len() - 1) % ConfigTab::ALL.len()];
     }
 
     // --- Navigation ---
@@ -222,18 +226,18 @@ impl DeploymentPanel {
 
         if let Some(picker) = &line.picker {
             let action = match picker {
-                PickerKind::GitRef { ref repo_url } => {
-                    Some(PanelAction::FetchGitRefs {
-                        repo_url: repo_url.clone(),
-                    })
-                }
+                PickerKind::GitRef { repo_url } => Some(PanelAction::FetchGitRefs {
+                    repo_url: repo_url.clone(),
+                }),
             };
             self.edit_mode = EditMode::Fetching;
             return action;
         }
 
         let value = line.raw_value.clone().unwrap_or_default();
-        self.edit_mode = EditMode::Editing { input: Input::new(value) };
+        self.edit_mode = EditMode::Editing {
+            input: Input::new(value),
+        };
         None
     }
 
@@ -244,7 +248,9 @@ impl DeploymentPanel {
             return Ok(None);
         };
         let new_value = input.value().to_string();
-        let field_path = self.detail_lines().get(self.selected_line())
+        let field_path = self
+            .detail_lines()
+            .get(self.selected_line())
             .and_then(|l| l.field.as_ref())
             .map(|f| f.path.clone());
         self.edit_mode = EditMode::Viewing;
@@ -252,16 +258,25 @@ impl DeploymentPanel {
 
         // Re-probe if a host credential field was edited (e.g. "hosts.helios01.address")
         if let Some(path) = field_path {
-            if path.starts_with("hosts.") && (path.ends_with(".address") || path.ends_with(".ssh_user") || path.ends_with(".ssh_port")) {
+            if path.starts_with("hosts.")
+                && (path.ends_with(".address")
+                    || path.ends_with(".ssh_user")
+                    || path.ends_with(".ssh_port"))
+            {
                 // Extract host name from path like "hosts.helios01.address"
                 let parts: Vec<&str> = path.split('.').collect();
                 if parts.len() >= 2 {
                     let host_name = parts[1];
-                    let probe_target = self.config.deployment.hosts.get(host_name)
+                    let probe_target = self
+                        .config
+                        .deployment
+                        .hosts
+                        .get(host_name)
                         .filter(|h| !h.address.is_empty())
                         .map(|h| (h.address.clone(), h.ssh_user.clone(), h.ssh_port()));
                     if let Some((address, ssh_user, port)) = probe_target {
-                        self.ssh_status.insert(host_name.to_string(), SshProbeStatus::Checking);
+                        self.ssh_status
+                            .insert(host_name.to_string(), SshProbeStatus::Checking);
                         self.rebuild_detail_lines();
                         return Ok(Some(PanelAction::ProbeSsh {
                             host: address,
@@ -386,7 +401,11 @@ impl DeploymentPanel {
         }
 
         for (name, host) in &d.hosts {
-            let status = self.ssh_status.get(name).copied().unwrap_or(SshProbeStatus::Unknown);
+            let status = self
+                .ssh_status
+                .get(name)
+                .copied()
+                .unwrap_or(SshProbeStatus::Unknown);
             let (dot, color) = match status {
                 SshProbeStatus::Unknown => ("●", Palette::default().text_disabled),
                 SshProbeStatus::Checking => ("●", Palette::default().text_disabled),
@@ -565,10 +584,7 @@ impl DeploymentPanel {
         push_editable(
             &mut network_tab,
             "uplink_speed",
-            d.network
-                .uplink_port_speed
-                .as_deref()
-                .unwrap_or("40G"),
+            d.network.uplink_port_speed.as_deref().unwrap_or("40G"),
             "deployment",
             "network.uplink_port_speed",
         );
@@ -648,10 +664,7 @@ impl DeploymentPanel {
         push_editable(
             &mut network_tab,
             "allowed_source_ips",
-            d.network
-                .allowed_source_ips
-                .as_deref()
-                .unwrap_or("any"),
+            d.network.allowed_source_ips.as_deref().unwrap_or("any"),
             "deployment",
             "network.allowed_source_ips",
         );
@@ -688,9 +701,7 @@ impl DeploymentPanel {
                     .omicron
                     .repo_url
                     .clone()
-                    .unwrap_or_else(|| {
-                        "https://github.com/oxidecomputer/omicron.git".into()
-                    }),
+                    .unwrap_or_else(|| "https://github.com/oxidecomputer/omicron.git".into()),
             },
         );
         push_editable(
@@ -1005,13 +1016,11 @@ impl ConfigPanel for DeploymentPanel {
         // Overlay: inline text editing — captures all input
         if let EditMode::Editing { .. } = self.edit_mode {
             match key.code {
-                KeyCode::Enter => {
-                    match self.confirm_edit() {
-                        Err(msg) => return PanelEvent::Action(PanelAction::Error(msg)),
-                        Ok(Some(action)) => return PanelEvent::Action(action),
-                        Ok(None) => {}
-                    }
-                }
+                KeyCode::Enter => match self.confirm_edit() {
+                    Err(msg) => return PanelEvent::Action(PanelAction::Error(msg)),
+                    Ok(Some(action)) => return PanelEvent::Action(action),
+                    Ok(None) => {}
+                },
                 KeyCode::Esc => self.cancel_edit(),
                 _ => self.handle_edit_event(key),
             }
@@ -1062,8 +1071,7 @@ impl ConfigPanel for DeploymentPanel {
         let p = palette;
 
         // Split: tab bar (1 line) + content
-        let chunks =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
 
         // Tab bar
         self.render_tab_row(frame, chunks[0], p);
@@ -1114,7 +1122,7 @@ impl ConfigPanel for DeploymentPanel {
                     popup_area,
                 );
             }
-            EditMode::GitRefSelect { ref selector } => {
+            EditMode::GitRefSelect { selector } => {
                 selector.render(frame, content_area, p);
             }
             _ => {}

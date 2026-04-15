@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use tokio::sync::mpsc;
 
 use super::{CommandOutput, RemoteHost};
@@ -68,17 +68,11 @@ impl RemoteHost for MockHost {
     async fn execute(&self, cmd: &str) -> Result<CommandOutput> {
         match self.find_response(cmd) {
             Some(resp) => Ok(resp.clone()),
-            None => Err(eyre!(
-                "MockHost: no response configured for command: {cmd}"
-            )),
+            None => Err(eyre!("MockHost: no response configured for command: {cmd}")),
         }
     }
 
-    async fn execute_streaming(
-        &self,
-        cmd: &str,
-        tx: mpsc::Sender<String>,
-    ) -> Result<i32> {
+    async fn execute_streaming(&self, cmd: &str, tx: mpsc::Sender<String>) -> Result<i32> {
         match self.find_response(cmd) {
             Some(resp) => {
                 for line in resp.stdout.lines() {
@@ -86,9 +80,7 @@ impl RemoteHost for MockHost {
                 }
                 Ok(resp.exit_code)
             }
-            None => Err(eyre!(
-                "MockHost: no response configured for command: {cmd}"
-            )),
+            None => Err(eyre!("MockHost: no response configured for command: {cmd}")),
         }
     }
 
@@ -108,7 +100,10 @@ mod tests {
     #[tokio::test]
     async fn test_mock_execute() {
         let mut mock = MockHost::new("test-host");
-        mock.add_success("zpool list", "rpool\t100\t50\t50\t-\t-\t0\t50\t1.00\tONLINE\t-\n");
+        mock.add_success(
+            "zpool list",
+            "rpool\t100\t50\t50\t-\t-\t0\t50\t1.00\tONLINE\t-\n",
+        );
 
         let result = mock.execute("zpool list -Hp").await.unwrap();
         assert_eq!(result.exit_code, 0);

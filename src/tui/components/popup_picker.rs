@@ -88,8 +88,7 @@ impl PopupPicker {
 
         if self.options.is_empty() {
             frame.render_widget(
-                Paragraph::new("  (no options)")
-                    .style(Style::default().fg(p.text_tertiary)),
+                Paragraph::new("  (no options)").style(Style::default().fg(p.text_tertiary)),
                 inner,
             );
             return;
@@ -129,7 +128,10 @@ mod tests {
     #[test]
     fn test_down_navigation() {
         let mut p = picker();
-        assert!(matches!(p.handle_key(key(KeyCode::Down)), PopupAction::Continue));
+        assert!(matches!(
+            p.handle_key(key(KeyCode::Down)),
+            PopupAction::Continue
+        ));
         assert_eq!(p.selected, 1);
         p.handle_key(key(KeyCode::Down));
         assert_eq!(p.selected, 2);
@@ -167,7 +169,10 @@ mod tests {
     #[test]
     fn test_esc_cancels() {
         let mut p = picker();
-        assert!(matches!(p.handle_key(key(KeyCode::Esc)), PopupAction::Cancel));
+        assert!(matches!(
+            p.handle_key(key(KeyCode::Esc)),
+            PopupAction::Cancel
+        ));
     }
 
     #[test]
@@ -177,7 +182,10 @@ mod tests {
         p.handle_key(key(KeyCode::Down));
         assert_eq!(p.selected, 0);
         // Enter cancels (no valid selection)
-        assert!(matches!(p.handle_key(key(KeyCode::Enter)), PopupAction::Cancel));
+        assert!(matches!(
+            p.handle_key(key(KeyCode::Enter)),
+            PopupAction::Cancel
+        ));
     }
 
     #[test]

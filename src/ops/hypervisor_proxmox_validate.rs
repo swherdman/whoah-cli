@@ -4,7 +4,7 @@
 //! and ISO file existence. Returns per-field status and available
 //! values for picker UIs.
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use serde::Deserialize;
 
 use crate::config::types::ProxmoxHypervisorConfig;
@@ -124,8 +124,12 @@ struct QemuVmConfig {
     net0: Option<String>,
 }
 
-fn default_cores() -> u32 { 2 }
-fn default_sockets() -> u32 { 1 }
+fn default_cores() -> u32 {
+    2
+}
+fn default_sockets() -> u32 {
+    1
+}
 
 // ── Validation logic ───────────────────────────────────────────────────
 
@@ -164,17 +168,16 @@ pub async fn validate_proxmox(
                         result.node = FieldStatus::Valid;
                     } else {
                         // Case-insensitive match — auto-fix
-                        let ci_match = nodes.iter().find(|n| {
-                            n.node.to_lowercase() == config.node.to_lowercase()
-                        });
+                        let ci_match = nodes
+                            .iter()
+                            .find(|n| n.node.to_lowercase() == config.node.to_lowercase());
                         if let Some(correct) = ci_match {
                             result.node = FieldStatus::Valid;
                             result.node_auto_fix = Some(correct.node.clone());
                         } else {
                             let available = result.available_nodes.join(", ");
-                            result.node = FieldStatus::Invalid(format!(
-                                "not found (available: {available})"
-                            ));
+                            result.node =
+                                FieldStatus::Invalid(format!("not found (available: {available})"));
                         }
                     }
                 }
@@ -216,9 +219,8 @@ pub async fn validate_proxmox(
                         }
                     } else {
                         let available = result.available_disk_storages.join(", ");
-                        result.disk_storage = FieldStatus::Invalid(format!(
-                            "not found (available: {available})"
-                        ));
+                        result.disk_storage =
+                            FieldStatus::Invalid(format!("not found (available: {available})"));
                     }
 
                     // Validate iso_storage
@@ -227,15 +229,13 @@ pub async fn validate_proxmox(
                             result.iso_storage = FieldStatus::Valid;
                             result.iso_storage_path = s.path.clone();
                         } else {
-                            result.iso_storage = FieldStatus::Invalid(
-                                "exists but doesn't support ISOs".into(),
-                            );
+                            result.iso_storage =
+                                FieldStatus::Invalid("exists but doesn't support ISOs".into());
                         }
                     } else {
                         let available = result.available_iso_storages.join(", ");
-                        result.iso_storage = FieldStatus::Invalid(format!(
-                            "not found (available: {available})"
-                        ));
+                        result.iso_storage =
+                            FieldStatus::Invalid(format!("not found (available: {available})"));
                     }
                 }
                 Err(e) => {
@@ -252,10 +252,7 @@ pub async fn validate_proxmox(
     }
 
     // Query 3: List ISO files (only if node + iso_storage are valid)
-    let node = result
-        .node_auto_fix
-        .as_deref()
-        .unwrap_or(&config.node);
+    let node = result.node_auto_fix.as_deref().unwrap_or(&config.node);
 
     if result.node == FieldStatus::Valid && result.iso_storage == FieldStatus::Valid {
         let cmd = format!(
@@ -296,8 +293,7 @@ pub async fn validate_proxmox(
             }
         }
     } else {
-        result.iso_file =
-            FieldStatus::Invalid("skipped (node or iso_storage invalid)".into());
+        result.iso_file = FieldStatus::Invalid("skipped (node or iso_storage invalid)".into());
     }
 
     result
@@ -325,9 +321,15 @@ pub struct ProxmoxVm {
 pub async fn list_vms(host: &str, user: &str, port: u16, node: &str) -> Result<Vec<ProxmoxVm>> {
     let cmd = format!("pvesh get /nodes/{node}/qemu --output-format json");
     let output = ssh_command(host, user, port, &cmd).await?;
-    let vms: Vec<QemuVmInfo> = serde_json::from_str(&output)
-        .map_err(|e| eyre!("Failed to parse VM list: {e}"))?;
-    Ok(vms.iter().map(|v| ProxmoxVm { vmid: v.vmid, name: v.name.clone() }).collect())
+    let vms: Vec<QemuVmInfo> =
+        serde_json::from_str(&output).map_err(|e| eyre!("Failed to parse VM list: {e}"))?;
+    Ok(vms
+        .iter()
+        .map(|v| ProxmoxVm {
+            vmid: v.vmid,
+            name: v.name.clone(),
+        })
+        .collect())
 }
 
 /// Query a specific VM's config from Proxmox and convert to our VmConfig.
@@ -340,10 +342,11 @@ pub async fn query_vm_config(
 ) -> Result<crate::config::types::VmConfig> {
     let cmd = format!("pvesh get /nodes/{node}/qemu/{vmid}/config --output-format json");
     let output = ssh_command(host, user, port, &cmd).await?;
-    let config: QemuVmConfig = serde_json::from_str(&output)
-        .map_err(|e| eyre!("Failed to parse VM config: {e}"))?;
+    let config: QemuVmConfig =
+        serde_json::from_str(&output).map_err(|e| eyre!("Failed to parse VM config: {e}"))?;
 
-    let memory_mb = config.memory
+    let memory_mb = config
+        .memory
         .as_deref()
         .and_then(|m| m.parse::<u32>().ok())
         .unwrap_or(49152);
@@ -382,7 +385,8 @@ fn parse_disk_spec(config: &QemuVmConfig) -> (u32, String) {
     };
 
     // Parse "size=256G" from spec like "local-lvm:vm-301-disk-0,size=256G"
-    let disk_gb = spec.split(',')
+    let disk_gb = spec
+        .split(',')
         .find_map(|part| {
             let part = part.trim();
             if part.starts_with("size=") {
@@ -407,7 +411,8 @@ fn parse_net_spec(config: &QemuVmConfig) -> (String, String) {
     // Model is before the "="
     let model = net.split('=').next().unwrap_or("e1000e").to_string();
 
-    let bridge = net.split(',')
+    let bridge = net
+        .split(',')
         .find_map(|part| {
             let part = part.trim();
             if part.starts_with("bridge=") {
@@ -485,13 +490,16 @@ mod tests {
 
     #[test]
     fn test_node_case_insensitive_match() {
-        let nodes = vec![
-            NodeInfo { node: "pve".into(), status: "online".into() },
-        ];
+        let nodes = vec![NodeInfo {
+            node: "pve".into(),
+            status: "online".into(),
+        }];
         let config_node = "PVE";
         let exact = nodes.iter().any(|n| n.node == config_node);
         assert!(!exact);
-        let ci = nodes.iter().find(|n| n.node.to_lowercase() == config_node.to_lowercase());
+        let ci = nodes
+            .iter()
+            .find(|n| n.node.to_lowercase() == config_node.to_lowercase());
         assert!(ci.is_some());
         assert_eq!(ci.unwrap().node, "pve");
     }
@@ -505,11 +513,13 @@ mod tests {
         ]"#;
         let storages: Vec<StorageInfo> = serde_json::from_str(json).unwrap();
 
-        let disk_storages: Vec<&str> = storages.iter()
+        let disk_storages: Vec<&str> = storages
+            .iter()
             .filter(|s| s.content.split(',').any(|c| c.trim() == "images"))
             .map(|s| s.storage.as_str())
             .collect();
-        let iso_storages: Vec<&str> = storages.iter()
+        let iso_storages: Vec<&str> = storages
+            .iter()
             .filter(|s| s.content.split(',').any(|c| c.trim() == "iso"))
             .map(|s| s.storage.as_str())
             .collect();
@@ -529,7 +539,8 @@ mod tests {
             "TrueNAS-SCALE.iso",
             "helios-install-ttyb.iso",
         ];
-        let filtered: Vec<&&str> = filenames.iter()
+        let filtered: Vec<&&str> = filenames
+            .iter()
             .filter(|n| n.starts_with("helios-install-") && n.ends_with(".iso"))
             .collect();
         assert_eq!(filtered.len(), 3);
@@ -540,26 +551,32 @@ mod tests {
 
     #[test]
     fn test_node_exact_match_no_auto_fix() {
-        let nodes = vec![
-            NodeInfo { node: "pve".into(), status: "online".into() },
-        ];
+        let nodes = vec![NodeInfo {
+            node: "pve".into(),
+            status: "online".into(),
+        }];
         let config_node = "pve";
         let exact = nodes.iter().any(|n| n.node == config_node);
         assert!(exact);
         // No auto-fix needed
-        let ci = nodes.iter().find(|n| n.node.to_lowercase() == config_node.to_lowercase());
+        let ci = nodes
+            .iter()
+            .find(|n| n.node.to_lowercase() == config_node.to_lowercase());
         assert_eq!(ci.unwrap().node, config_node);
     }
 
     #[test]
     fn test_node_no_match() {
-        let nodes = vec![
-            NodeInfo { node: "pve".into(), status: "online".into() },
-        ];
+        let nodes = vec![NodeInfo {
+            node: "pve".into(),
+            status: "online".into(),
+        }];
         let config_node = "badnode";
         let exact = nodes.iter().any(|n| n.node == config_node);
         assert!(!exact);
-        let ci = nodes.iter().find(|n| n.node.to_lowercase() == config_node.to_lowercase());
+        let ci = nodes
+            .iter()
+            .find(|n| n.node.to_lowercase() == config_node.to_lowercase());
         assert!(ci.is_none());
     }
 }

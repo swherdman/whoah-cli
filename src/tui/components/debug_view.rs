@@ -4,7 +4,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::ssh::registry::{self, SessionSnapshot};
-use crate::tui::theme::{format_duration, panel_block_accent, Palette};
+use crate::tui::theme::{Palette, format_duration, panel_block_accent};
 
 use crate::action::Action;
 
@@ -163,8 +163,14 @@ impl Component for DebugView {
         } else {
             // Header row
             lines.push(Line::from(vec![
-                Span::styled(format!("    {:<24}", "NAME"), Style::default().fg(p.text_tertiary)),
-                Span::styled(format!("{:<20}", "STATUS"), Style::default().fg(p.text_tertiary)),
+                Span::styled(
+                    format!("    {:<24}", "NAME"),
+                    Style::default().fg(p.text_tertiary),
+                ),
+                Span::styled(
+                    format!("{:<20}", "STATUS"),
+                    Style::default().fg(p.text_tertiary),
+                ),
                 Span::styled("PORTS", Style::default().fg(p.text_tertiary)),
             ]));
             for c in &self.containers {
@@ -174,24 +180,26 @@ impl Component for DebugView {
                     p.yellow_warn
                 };
                 lines.push(Line::from(vec![
-                    Span::styled(format!("    {:<24}", c.name), Style::default().fg(p.text_default)),
-                    Span::styled(format!("{:<20}", c.status), Style::default().fg(status_color)),
+                    Span::styled(
+                        format!("    {:<24}", c.name),
+                        Style::default().fg(p.text_default),
+                    ),
+                    Span::styled(
+                        format!("{:<20}", c.status),
+                        Style::default().fg(status_color),
+                    ),
                     Span::styled(c.ports.clone(), Style::default().fg(p.text_tertiary)),
                 ]));
             }
         }
 
         let total_lines = lines.len();
-        frame.render_widget(
-            Paragraph::new(lines).scroll((self.scroll, 0)),
-            inner,
-        );
+        frame.render_widget(Paragraph::new(lines).scroll((self.scroll, 0)), inner);
 
         // Scrollbar
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(p.border_default));
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(self.scroll as usize);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(self.scroll as usize);
         frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
     }
 }

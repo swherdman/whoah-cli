@@ -15,14 +15,14 @@
 use std::io;
 use std::time::Duration;
 
+use crossterm::ExecutableCommand;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use crossterm::ExecutableCommand;
+use ratatui::Terminal;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
-use ratatui::Terminal;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Palette — Design System (oxidecomputer/design-system OKLCH dark theme)
@@ -32,28 +32,28 @@ use ratatui::Terminal;
 struct P;
 #[allow(dead_code)]
 impl P {
-    const BG_BASE: Color = Color::Rgb(11, 13, 18);           // #0B0D12 neutral-0
-    const BG_PANEL: Color = Color::Rgb(18, 21, 25);           // #121519 neutral-50
-    const BG_HOVER: Color = Color::Rgb(30, 33, 36);           // #1E2124 neutral-200
-    const BORDER_DEFAULT: Color = Color::Rgb(48, 49, 52);     // #303134 neutral-300
-    const BORDER_FOCUS: Color = Color::Rgb(67, 68, 71);       // #434447 neutral-400
-    const TEXT_DISABLED: Color = Color::Rgb(93, 94, 96);       // #5D5E60 neutral-500
-    const TEXT_TERTIARY: Color = Color::Rgb(128, 129, 131);    // #808183 neutral-600
-    const TEXT_SECONDARY: Color = Color::Rgb(162, 163, 164);   // #A2A3A4 neutral-700
-    const TEXT_DEFAULT: Color = Color::Rgb(185, 186, 187);     // #B9BABB neutral-800
-    const TEXT_RAISED: Color = Color::Rgb(221, 221, 221);      // #DDDDDD neutral-900
-    const TEXT_BRIGHT: Color = Color::Rgb(238, 238, 238);      // #EEEEEE neutral-1100
-    const GREEN_PRIMARY: Color = Color::Rgb(0, 216, 145);      // #00D891 green-800
-    const GREEN_BORDER: Color = Color::Rgb(0, 147, 102);       // #009366 green-600
-    const YELLOW_WARN: Color = Color::Rgb(254, 187, 85);       // #FEBB55 yellow-800
-    const RED_ERROR: Color = Color::Rgb(254, 103, 132);        // #FE6784 red-800
-    const BLUE_INFO: Color = Color::Rgb(129, 153, 254);        // #8199FE blue-800
-    const ASCII_STRUCTURAL: Color = Color::Rgb(0, 147, 102);   // #009366 green-600
+    const BG_BASE: Color = Color::Rgb(11, 13, 18); // #0B0D12 neutral-0
+    const BG_PANEL: Color = Color::Rgb(18, 21, 25); // #121519 neutral-50
+    const BG_HOVER: Color = Color::Rgb(30, 33, 36); // #1E2124 neutral-200
+    const BORDER_DEFAULT: Color = Color::Rgb(48, 49, 52); // #303134 neutral-300
+    const BORDER_FOCUS: Color = Color::Rgb(67, 68, 71); // #434447 neutral-400
+    const TEXT_DISABLED: Color = Color::Rgb(93, 94, 96); // #5D5E60 neutral-500
+    const TEXT_TERTIARY: Color = Color::Rgb(128, 129, 131); // #808183 neutral-600
+    const TEXT_SECONDARY: Color = Color::Rgb(162, 163, 164); // #A2A3A4 neutral-700
+    const TEXT_DEFAULT: Color = Color::Rgb(185, 186, 187); // #B9BABB neutral-800
+    const TEXT_RAISED: Color = Color::Rgb(221, 221, 221); // #DDDDDD neutral-900
+    const TEXT_BRIGHT: Color = Color::Rgb(238, 238, 238); // #EEEEEE neutral-1100
+    const GREEN_PRIMARY: Color = Color::Rgb(0, 216, 145); // #00D891 green-800
+    const GREEN_BORDER: Color = Color::Rgb(0, 147, 102); // #009366 green-600
+    const YELLOW_WARN: Color = Color::Rgb(254, 187, 85); // #FEBB55 yellow-800
+    const RED_ERROR: Color = Color::Rgb(254, 103, 132); // #FE6784 red-800
+    const BLUE_INFO: Color = Color::Rgb(129, 153, 254); // #8199FE blue-800
+    const ASCII_STRUCTURAL: Color = Color::Rgb(0, 147, 102); // #009366 green-600
 }
 
 const FILLED: &str = "\u{258A}"; // ▊  — progress bars
-const EMPTY: &str = "\u{2395}";  // ⎕  — progress bars
-const GRID_ON: &str = "\u{25A0}";  // ■  — zone distribution: present (single)
+const EMPTY: &str = "\u{2395}"; // ⎕  — progress bars
+const GRID_ON: &str = "\u{25A0}"; // ■  — zone distribution: present (single)
 const GRID_OFF: &str = "\u{25A1}"; // □  — zone distribution: not present
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -61,10 +61,16 @@ const GRID_OFF: &str = "\u{25A1}"; // □  — zone distribution: not present
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode { Dashboard, Recovery }
+enum Mode {
+    Dashboard,
+    Recovery,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FocusedPanel { Status, Disk }
+enum FocusedPanel {
+    Status,
+    Disk,
+}
 
 struct MockupApp {
     mode: Mode,
@@ -73,7 +79,10 @@ struct MockupApp {
 
 impl MockupApp {
     fn new() -> Self {
-        Self { mode: Mode::Dashboard, focused: FocusedPanel::Status }
+        Self {
+            mode: Mode::Dashboard,
+            focused: FocusedPanel::Status,
+        }
     }
     fn toggle_mode(&mut self) {
         self.mode = match self.mode {
@@ -100,13 +109,24 @@ fn render_bar(ratio: f64, width: u16, fg: Color) -> Line<'static> {
     let empty = total.saturating_sub(filled);
     Line::from(vec![
         Span::styled(FILLED.repeat(filled), Style::default().fg(fg)),
-        Span::styled(EMPTY.repeat(empty), Style::default().fg(P::ASCII_STRUCTURAL)),
+        Span::styled(
+            EMPTY.repeat(empty),
+            Style::default().fg(P::ASCII_STRUCTURAL),
+        ),
     ])
 }
 
 fn panel_block(title: &str, focused: bool) -> Block<'static> {
-    let border_color = if focused { P::BORDER_FOCUS } else { P::BORDER_DEFAULT };
-    let title_color = if focused { P::TEXT_RAISED } else { P::TEXT_TERTIARY };
+    let border_color = if focused {
+        P::BORDER_FOCUS
+    } else {
+        P::BORDER_DEFAULT
+    };
+    let title_color = if focused {
+        P::TEXT_RAISED
+    } else {
+        P::TEXT_TERTIARY
+    };
     Block::default()
         .title(format!(" {} ", title.to_uppercase()))
         .borders(Borders::ALL)
@@ -129,14 +149,20 @@ fn panel_block_accent(title: &str) -> Block<'static> {
 fn section_header(text: &str) -> Line<'static> {
     Line::from(Span::styled(
         text.to_uppercase(),
-        Style::default().fg(P::TEXT_BRIGHT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(P::TEXT_BRIGHT)
+            .add_modifier(Modifier::BOLD),
     ))
 }
 
 fn threshold_color(pct: u8, warning: u8, critical: u8) -> Color {
-    if pct >= critical { P::RED_ERROR }
-    else if pct >= warning { P::YELLOW_WARN }
-    else { P::GREEN_PRIMARY }
+    if pct >= critical {
+        P::RED_ERROR
+    } else if pct >= warning {
+        P::YELLOW_WARN
+    } else {
+        P::GREEN_PRIMARY
+    }
 }
 
 fn service_span(state: &str) -> Span<'static> {
@@ -176,7 +202,7 @@ fn render_dashboard(frame: &mut Frame, app: &MockupApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // title bar
-            Constraint::Min(8),   // main content
+            Constraint::Min(8),    // main content
             Constraint::Length(8), // log panel
             Constraint::Length(1), // keybindings bar
         ])
@@ -200,7 +226,9 @@ fn render_title_bar(frame: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled(
             " whoah — home-lab ",
-            Style::default().fg(P::TEXT_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(P::TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("192.168.2.209 ", Style::default().fg(P::TEXT_DEFAULT)),
         Span::styled("online ", Style::default().fg(P::GREEN_PRIMARY)),
@@ -266,9 +294,10 @@ fn render_status_panel(frame: &mut Frame, area: Rect, focused: bool) {
     let pools = ["0", "1", "2"];
 
     // Column header row
-    let mut header_spans = vec![
-        Span::styled(format!("  {:<18}", ""), Style::default().fg(P::TEXT_DISABLED)),
-    ];
+    let mut header_spans = vec![Span::styled(
+        format!("  {:<18}", ""),
+        Style::default().fg(P::TEXT_DISABLED),
+    )];
     for pool in &pools {
         header_spans.push(Span::styled(
             format!("  {pool}"),
@@ -280,21 +309,22 @@ fn render_status_panel(frame: &mut Frame, area: Rect, focused: bool) {
     // Service placement grid: (service_name, [count_on_pool0, pool1, pool2])
     // Uses real service names from KNOWN_SERVICES in parse/zones.rs
     let distribution: Vec<(&str, [u32; 3])> = vec![
-        ("clickhouse",       [0, 0, 1]),
-        ("cockroachdb",      [1, 1, 1]),
-        ("crucible",         [1, 1, 1]),
-        ("crucible_pantry",  [1, 1, 1]),
-        ("external_dns",     [0, 0, 1]),
-        ("internal_dns",     [1, 0, 0]),
-        ("nexus",            [0, 1, 1]),
-        ("ntp",              [1, 0, 0]),
-        ("oximeter",         [0, 1, 0]),
+        ("clickhouse", [0, 0, 1]),
+        ("cockroachdb", [1, 1, 1]),
+        ("crucible", [1, 1, 1]),
+        ("crucible_pantry", [1, 1, 1]),
+        ("external_dns", [0, 0, 1]),
+        ("internal_dns", [1, 0, 0]),
+        ("nexus", [0, 1, 1]),
+        ("ntp", [1, 0, 0]),
+        ("oximeter", [0, 1, 0]),
     ];
 
     for (svc, counts) in &distribution {
-        let mut spans = vec![
-            Span::styled(format!("  {svc:<18}"), Style::default().fg(P::TEXT_DEFAULT)),
-        ];
+        let mut spans = vec![Span::styled(
+            format!("  {svc:<18}"),
+            Style::default().fg(P::TEXT_DEFAULT),
+        )];
         for &count in counts {
             if count == 0 {
                 spans.push(Span::styled(
@@ -319,13 +349,12 @@ fn render_status_panel(frame: &mut Frame, area: Rect, focused: bool) {
     // Instances — separated visually, count per pool
     lines.push(Line::from(""));
     lines.push(section_header("Instances"));
-    let instance_dist: Vec<(&str, [u32; 3])> = vec![
-        ("propolis-server",  [1, 1, 0]),
-    ];
+    let instance_dist: Vec<(&str, [u32; 3])> = vec![("propolis-server", [1, 1, 0])];
     for (svc, counts) in &instance_dist {
-        let mut spans = vec![
-            Span::styled(format!("  {svc:<18}"), Style::default().fg(P::TEXT_DEFAULT)),
-        ];
+        let mut spans = vec![Span::styled(
+            format!("  {svc:<18}"),
+            Style::default().fg(P::TEXT_DEFAULT),
+        )];
         for &count in counts {
             if count == 0 {
                 spans.push(Span::styled(
@@ -370,11 +399,7 @@ fn render_disk_panel(frame: &mut Frame, area: Rect, focused: bool) {
     lines.push(render_bar(0.30, bar_width, rpool_color));
 
     // oxp pools
-    let oxp_pools = [
-        ("oxp_aaa111", 38u8),
-        ("oxp_bbb222", 31),
-        ("oxp_ccc333", 29),
-    ];
+    let oxp_pools = [("oxp_aaa111", 38u8), ("oxp_bbb222", 31), ("oxp_ccc333", 29)];
     for (name, pct) in &oxp_pools {
         let color = threshold_color(*pct, 85, 95);
         lines.push(Line::from(vec![
@@ -390,7 +415,11 @@ fn render_disk_panel(frame: &mut Frame, area: Rect, focused: bool) {
     // Vdev files
     let vdevs = [("0.vdev", 11.6_f64), ("1.vdev", 10.0), ("2.vdev", 10.3)];
     for (name, gib) in &vdevs {
-        let color = if *gib > 35.0 { P::RED_ERROR } else { P::TEXT_DEFAULT };
+        let color = if *gib > 35.0 {
+            P::RED_ERROR
+        } else {
+            P::TEXT_DEFAULT
+        };
         lines.push(Line::from(Span::styled(
             format!("{name}: {gib:.1} GiB"),
             Style::default().fg(color),
@@ -436,7 +465,7 @@ fn render_recovery(frame: &mut Frame) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // title bar
-            Constraint::Min(5),   // recovery view
+            Constraint::Min(5),    // recovery view
             Constraint::Length(1), // keybindings
         ])
         .split(area);
@@ -472,7 +501,9 @@ fn render_recovery_view(frame: &mut Frame, area: Rect) {
     let eta = Paragraph::new(Line::from(vec![
         Span::styled(
             "Step 5/7",
-            Style::default().fg(P::YELLOW_WARN).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(P::YELLOW_WARN)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ~360s remaining", Style::default().fg(P::TEXT_TERTIARY)),
     ]))
@@ -487,16 +518,56 @@ fn render_recovery_view(frame: &mut Frame, area: Rect) {
     // Icons and format match recovery_view.rs:
     //   "  " pending, ">>" running, "OK" completed, "!!" failed
 
-    struct Step { label: &'static str, icon: &'static str, state: u8, time: &'static str }
+    struct Step {
+        label: &'static str,
+        icon: &'static str,
+        state: u8,
+        time: &'static str,
+    }
 
     let steps = [
-        Step { label: "Wait for baseline service", icon: "OK", state: 2, time: "(45.2s)" },
-        Step { label: "Uninstall broken state",    icon: "OK", state: 2, time: "(28.1s)" },
-        Step { label: "Destroy virtual hardware",  icon: "OK", state: 2, time: "(8.4s)"  },
-        Step { label: "Recreate virtual hardware",  icon: "OK", state: 2, time: "(31.0s)" },
-        Step { label: "Install packages",           icon: ">>", state: 1, time: "(42s...)" },
-        Step { label: "Monitor zone startup",       icon: "  ", state: 0, time: "[~360s]" },
-        Step { label: "Verify services",            icon: "  ", state: 0, time: "[~10s]"  },
+        Step {
+            label: "Wait for baseline service",
+            icon: "OK",
+            state: 2,
+            time: "(45.2s)",
+        },
+        Step {
+            label: "Uninstall broken state",
+            icon: "OK",
+            state: 2,
+            time: "(28.1s)",
+        },
+        Step {
+            label: "Destroy virtual hardware",
+            icon: "OK",
+            state: 2,
+            time: "(8.4s)",
+        },
+        Step {
+            label: "Recreate virtual hardware",
+            icon: "OK",
+            state: 2,
+            time: "(31.0s)",
+        },
+        Step {
+            label: "Install packages",
+            icon: ">>",
+            state: 1,
+            time: "(42s...)",
+        },
+        Step {
+            label: "Monitor zone startup",
+            icon: "  ",
+            state: 0,
+            time: "[~360s]",
+        },
+        Step {
+            label: "Verify services",
+            icon: "  ",
+            state: 0,
+            time: "[~10s]",
+        },
     ];
 
     let step_lines: Vec<Line> = steps
@@ -504,15 +575,20 @@ fn render_recovery_view(frame: &mut Frame, area: Rect) {
         .enumerate()
         .map(|(i, step)| {
             let style = match step.state {
-                2 => Style::default().fg(P::GREEN_PRIMARY),            // completed
-                1 => Style::default().fg(P::YELLOW_WARN).add_modifier(Modifier::BOLD), // running
-                _ => Style::default().fg(P::TEXT_DISABLED),            // pending
+                2 => Style::default().fg(P::GREEN_PRIMARY), // completed
+                1 => Style::default()
+                    .fg(P::YELLOW_WARN)
+                    .add_modifier(Modifier::BOLD), // running
+                _ => Style::default().fg(P::TEXT_DISABLED), // pending
             };
             // Format matches: " {icon}  Step N: {label}  {time}"
             Line::from(vec![
                 Span::styled(format!(" {} ", step.icon), style),
                 Span::styled(format!("Step {}: {}", i + 1, step.label), style),
-                Span::styled(format!(" {}", step.time), Style::default().fg(P::TEXT_TERTIARY)),
+                Span::styled(
+                    format!(" {}", step.time),
+                    Style::default().fg(P::TEXT_TERTIARY),
+                ),
             ])
         })
         .collect();
@@ -524,7 +600,10 @@ fn render_recovery_view(frame: &mut Frame, area: Rect) {
     // Matches recovery_view.rs: Block with Borders::TOP, title " Output "
 
     let output_block = Block::default()
-        .title(Line::from(Span::styled(" Output ", Style::default().fg(P::TEXT_TERTIARY))))
+        .title(Line::from(Span::styled(
+            " Output ",
+            Style::default().fg(P::TEXT_TERTIARY),
+        )))
         .borders(Borders::TOP)
         .border_style(Style::default().fg(P::BORDER_DEFAULT))
         .style(Style::default().bg(P::BG_PANEL));

@@ -106,9 +106,10 @@ impl Component for StatusPanel {
             pool_names.sort();
 
             // Column headers: pool numbers
-            let mut header_spans = vec![
-                Span::styled(format!("{:<18} ", ""), Style::default().fg(p.text_tertiary)),
-            ];
+            let mut header_spans = vec![Span::styled(
+                format!("{:<18} ", ""),
+                Style::default().fg(p.text_tertiary),
+            )];
             for (i, _) in pool_names.iter().enumerate() {
                 header_spans.push(Span::styled(
                     format!("{:<4}", i),
@@ -125,9 +126,10 @@ impl Component for StatusPanel {
                 if let Some(zone_names) = placement.get(*pool_name) {
                     for zone_name in zone_names {
                         // Check if this is a propolis instance
-                        let is_instance = status.zones.zones.iter().any(|z| {
-                            z.service_name == *zone_name && z.kind == ZoneKind::Instance
-                        });
+                        let is_instance =
+                            status.zones.zones.iter().any(|z| {
+                                z.service_name == *zone_name && z.kind == ZoneKind::Instance
+                            });
                         if is_instance {
                             instance_pool_counts[pool_idx] += 1;
                         } else {
@@ -145,12 +147,10 @@ impl Component for StatusPanel {
             svc_names.sort();
             for svc_name in svc_names {
                 let counts = &service_pool_counts[svc_name];
-                let mut row_spans = vec![
-                    Span::styled(
-                        format!("  {:<16} ", svc_name),
-                        Style::default().fg(p.text_secondary),
-                    ),
-                ];
+                let mut row_spans = vec![Span::styled(
+                    format!("  {:<16} ", svc_name),
+                    Style::default().fg(p.text_secondary),
+                )];
                 for &count in counts {
                     let (ch, color) = if count == 0 {
                         ("\u{25A1}", p.text_disabled) // □
@@ -180,12 +180,10 @@ impl Component for StatusPanel {
             if has_instances {
                 lines.push(Line::from(""));
                 lines.push(theme::section_header("Instances", &p));
-                let mut row_spans = vec![
-                    Span::styled(
-                        format!("  {:<16} ", "propolis-server"),
-                        Style::default().fg(p.text_secondary),
-                    ),
-                ];
+                let mut row_spans = vec![Span::styled(
+                    format!("  {:<16} ", "propolis-server"),
+                    Style::default().fg(p.text_secondary),
+                )];
                 for &count in &instance_pool_counts {
                     let (ch, color) = if count == 0 {
                         ("\u{25A1}", p.text_disabled)
@@ -211,16 +209,12 @@ impl Component for StatusPanel {
         }
 
         let total_lines = lines.len();
-        frame.render_widget(
-            Paragraph::new(lines).scroll((self.scroll, 0)),
-            inner,
-        );
+        frame.render_widget(Paragraph::new(lines).scroll((self.scroll, 0)), inner);
 
         // Scrollbar
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(p.border_default));
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(self.scroll as usize);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(self.scroll as usize);
         frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
     }
 }
@@ -254,14 +248,20 @@ fn zone_count_lines(status: &HostStatus, p: &Palette) -> Vec<Line<'static>> {
             None => format!("{actual}"),
         };
         lines.push(Line::from(vec![
-            Span::styled(format!("  {svc:<16} "), Style::default().fg(p.text_secondary)),
+            Span::styled(
+                format!("  {svc:<16} "),
+                Style::default().fg(p.text_secondary),
+            ),
             Span::styled(count_str, Style::default().fg(color)),
         ]));
     }
 
     if status.zones.instance_count > 0 {
         lines.push(Line::from(vec![
-            Span::styled(format!("  {:<16} ", "instances"), Style::default().fg(p.text_secondary)),
+            Span::styled(
+                format!("  {:<16} ", "instances"),
+                Style::default().fg(p.text_secondary),
+            ),
             Span::styled(
                 format!("{}", status.zones.instance_count),
                 Style::default().fg(p.blue_info),

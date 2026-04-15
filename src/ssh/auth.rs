@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use russh::client::{AuthResult, Handle};
 use russh::keys::key::PrivateKeyWithHashAlg;
 

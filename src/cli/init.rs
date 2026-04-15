@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 use dialoguer::{Confirm, Input};
 
 use super::InitArgs;
@@ -61,8 +61,7 @@ async fn run_import(host_str: &str) -> Result<()> {
     eprintln!("  Infra IP:           {}", discovered.network.infra_ip);
     eprintln!(
         "  Instance pool:      {} - {}",
-        discovered.network.instance_pool_range.first,
-        discovered.network.instance_pool_range.last
+        discovered.network.instance_pool_range.first, discovered.network.instance_pool_range.last
     );
     eprintln!("  Vdev count:         {}", discovered.vdev_count);
     if let Some(size) = discovered.vdev_size_bytes {
@@ -92,12 +91,7 @@ async fn run_import(host_str: &str) -> Result<()> {
         return Ok(());
     }
 
-    let config = build_config_from_discovered(
-        &name,
-        &address,
-        &ssh_user,
-        &discovered,
-    );
+    let config = build_config_from_discovered(&name, &address, &ssh_user, &discovered);
 
     create_deployment(&name, &config)?;
     set_default_if_only(&name)?;
@@ -209,10 +203,7 @@ async fn run_wizard() -> Result<()> {
             },
             network: NetworkConfig {
                 gateway,
-                external_dns_ips: dns_ips
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .collect(),
+                external_dns_ips: dns_ips.split(',').map(|s| s.trim().to_string()).collect(),
                 internal_services_range: IpRange {
                     first: services_first,
                     last: services_last,

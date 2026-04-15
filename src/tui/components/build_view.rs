@@ -2,7 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::ops::pipeline::{Phase, Pipeline, StepStatus};
-use crate::tui::theme::{format_duration, panel_block_accent, render_bar, Palette};
+use crate::tui::theme::{Palette, format_duration, panel_block_accent, render_bar};
 
 use crate::action::Action;
 
@@ -122,13 +122,7 @@ impl BuildView {
         self.render_log_pane(frame, chunks[2], pipeline, &p);
     }
 
-    fn render_progress(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        pipeline: &Pipeline,
-        p: &Palette,
-    ) {
+    fn render_progress(&self, frame: &mut Frame, area: Rect, pipeline: &Pipeline, p: &Palette) {
         let (done, total) = pipeline.progress();
         let ratio = if total > 0 {
             done as f64 / total as f64
@@ -153,18 +147,17 @@ impl BuildView {
                 format_duration(elapsed)
             )
         } else if pipeline.has_failure() {
-            format!("Failed at step {done}/{total} — {}", format_duration(elapsed))
-        } else if done > 0 {
             format!(
-                "Step {done}/{total} — {}",
+                "Failed at step {done}/{total} — {}",
                 format_duration(elapsed)
             )
+        } else if done > 0 {
+            format!("Step {done}/{total} — {}", format_duration(elapsed))
         } else {
             format!("0/{total} steps — ready")
         };
 
-        let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-            .split(area);
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
 
         frame.render_widget(
             Paragraph::new(status_text).style(Style::default().fg(bar_color)),
@@ -174,13 +167,7 @@ impl BuildView {
         frame.render_widget(Paragraph::new(vec![bar]), rows[1]);
     }
 
-    fn render_steps(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        pipeline: &Pipeline,
-        p: &Palette,
-    ) {
+    fn render_steps(&mut self, frame: &mut Frame, area: Rect, pipeline: &Pipeline, p: &Palette) {
         let mut lines: Vec<Line> = Vec::new();
         let mut flat_idx: usize = 0;
         // Track which line index the selected step starts at (for auto-scroll)
@@ -209,8 +196,8 @@ impl BuildView {
 
             // Steps
             for step in &phase.steps {
-                let is_selected = self.focus == BuildFocus::StepList
-                    && flat_idx == self.selected_step;
+                let is_selected =
+                    self.focus == BuildFocus::StepList && flat_idx == self.selected_step;
 
                 if is_selected {
                     selected_line = Some(lines.len());
@@ -249,10 +236,7 @@ impl BuildView {
         }
 
         let total_lines = lines.len();
-        frame.render_widget(
-            Paragraph::new(lines).scroll((self.scroll, 0)),
-            area,
-        );
+        frame.render_widget(Paragraph::new(lines).scroll((self.scroll, 0)), area);
 
         // Scrollbar: accent color when step list is focused
         let scrollbar_color = if self.focus == BuildFocus::StepList {
@@ -262,8 +246,7 @@ impl BuildView {
         };
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(scrollbar_color));
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(self.scroll as usize);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(self.scroll as usize);
         frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
     }
 
@@ -335,30 +318,18 @@ impl BuildView {
         let prefix = if is_selected { "  ▸ " } else { "    " };
 
         Line::from(vec![
-            Span::styled(
-                format!("{prefix}{icon} "),
-                Style::default().fg(icon_color),
-            ),
+            Span::styled(format!("{prefix}{icon} "), Style::default().fg(icon_color)),
             Span::styled(step.name.to_string(), name_style),
             Span::styled(time_str, Style::default().fg(p.text_tertiary)),
         ])
     }
 
-    fn render_log_pane(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        pipeline: &Pipeline,
-        p: &Palette,
-    ) {
+    fn render_log_pane(&mut self, frame: &mut Frame, area: Rect, pipeline: &Pipeline, p: &Palette) {
         // Determine which step's output to display:
         // 1. If step list has focus, show the selected step's output
         // 2. Otherwise, show the running step (or last failed)
-        let all_steps: Vec<&crate::ops::pipeline::Step> = pipeline
-            .phases
-            .iter()
-            .flat_map(|ph| &ph.steps)
-            .collect();
+        let all_steps: Vec<&crate::ops::pipeline::Step> =
+            pipeline.phases.iter().flat_map(|ph| &ph.steps).collect();
 
         let display_step = if self.focus == BuildFocus::StepList {
             // Show selected step
@@ -434,8 +405,7 @@ impl BuildView {
         // Show "(no output)" for steps with empty buffers
         if output.is_empty() {
             frame.render_widget(
-                Paragraph::new("  (no output)")
-                    .style(Style::default().fg(p.text_disabled)),
+                Paragraph::new("  (no output)").style(Style::default().fg(p.text_disabled)),
                 log_inner,
             );
             return;
@@ -477,8 +447,7 @@ impl Component for BuildView {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         frame.render_widget(
-            Paragraph::new("  No pipeline loaded.")
-                .style(Style::default().fg(p.text_tertiary)),
+            Paragraph::new("  No pipeline loaded.").style(Style::default().fg(p.text_tertiary)),
             inner,
         );
     }

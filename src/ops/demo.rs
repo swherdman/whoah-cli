@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::config::types::{derive_expected_zones, DeploymentConfig};
+use crate::config::types::{DeploymentConfig, derive_expected_zones};
 use crate::event::BuildEvent;
 use crate::ops::pipeline::build_deploy_pipeline;
 use crate::ops::status::{
@@ -173,10 +173,7 @@ pub fn demo_status(config: &DeploymentConfig) -> HostStatus {
                 service_name: svc.clone(),
             });
 
-            placement
-                .entry(pool_name)
-                .or_default()
-                .push(svc.clone());
+            placement.entry(pool_name).or_default().push(svc.clone());
 
             zone_id += 1;
         }
@@ -185,9 +182,9 @@ pub fn demo_status(config: &DeploymentConfig) -> HostStatus {
     // Pools
     let rpool = Some(zpool::ZpoolInfo {
         name: "rpool".into(),
-        size_bytes: 267_544_698_880,      // 249 GiB
-        allocated_bytes: 82_530_148_352,  // ~77 GiB
-        free_bytes: 185_014_550_528,      // ~172 GiB
+        size_bytes: 267_544_698_880,     // 249 GiB
+        allocated_bytes: 82_530_148_352, // ~77 GiB
+        free_bytes: 185_014_550_528,     // ~172 GiB
         fragmentation_pct: Some(25),
         capacity_pct: 30,
         health: "ONLINE".into(),

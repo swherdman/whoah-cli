@@ -1,8 +1,8 @@
 use ratatui::crossterm::event::{Event as CtEvent, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
-use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
 
 use crate::git::RepoRefs;
 use crate::tui::theme::Palette;
@@ -70,8 +70,7 @@ impl GitRefSelector {
         let current = current_git_ref.unwrap_or("");
 
         // Determine initial mode by checking what the current ref matches
-        let (mode, branch_val, tag_val, commit_val) =
-            classify_ref(current, &cache);
+        let (mode, branch_val, tag_val, commit_val) = classify_ref(current, &cache);
 
         let mut sel = Self {
             mode,
@@ -155,8 +154,10 @@ impl GitRefSelector {
         match self.mode {
             RefMode::Branch => {
                 // Strip " (default)" suffix if present
-                let name = display.strip_suffix(" (default)")
-                    .unwrap_or(&display).to_string();
+                let name = display
+                    .strip_suffix(" (default)")
+                    .unwrap_or(&display)
+                    .to_string();
                 self.branch_input = Input::new(name.clone());
                 self.tag_input = Input::new(String::new());
                 if let Some(entry) = self.cache.branches.iter().find(|b| b.name == name) {
@@ -171,7 +172,11 @@ impl GitRefSelector {
             }
             RefMode::Commit => {
                 // Display format is "abc123def456 commit message" — extract just the SHA
-                let sha = display.split_whitespace().next().unwrap_or(&display).to_string();
+                let sha = display
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or(&display)
+                    .to_string();
                 self.commit_input = Input::new(sha);
             }
         }
@@ -186,7 +191,9 @@ impl GitRefSelector {
                 if name.is_empty() || name == self.cache.default_branch {
                     return Some(String::new()); // empty = HEAD/default
                 }
-                self.cache.branches.iter()
+                self.cache
+                    .branches
+                    .iter()
                     .find(|b| b.name == name)
                     .map(|b| b.sha.clone())
             }
@@ -195,13 +202,19 @@ impl GitRefSelector {
                 if name.is_empty() {
                     return None;
                 }
-                self.cache.tags.iter()
+                self.cache
+                    .tags
+                    .iter()
                     .find(|t| t.name == name)
                     .map(|t| t.sha.clone())
             }
             RefMode::Commit => {
                 let v = self.commit_input.value();
-                if v.is_empty() { None } else { Some(v.to_string()) }
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v.to_string())
+                }
             }
         }
     }
@@ -210,7 +223,10 @@ impl GitRefSelector {
         match self.mode {
             RefMode::Branch => {
                 let query = self.branch_input.value().to_lowercase();
-                self.filtered = self.cache.branches.iter()
+                self.filtered = self
+                    .cache
+                    .branches
+                    .iter()
                     .filter(|b| query.is_empty() || b.name.to_lowercase().contains(&query))
                     .take(15)
                     .map(|b| {
@@ -224,7 +240,10 @@ impl GitRefSelector {
             }
             RefMode::Tag => {
                 let query = self.tag_input.value().to_lowercase();
-                self.filtered = self.cache.tags.iter()
+                self.filtered = self
+                    .cache
+                    .tags
+                    .iter()
                     .filter(|t| query.is_empty() || t.name.to_lowercase().contains(&query))
                     .take(15)
                     .map(|t| t.name.clone())
@@ -232,7 +251,10 @@ impl GitRefSelector {
             }
             RefMode::Commit => {
                 let query = self.commit_input.value().to_lowercase();
-                self.filtered = self.cache.commits.iter()
+                self.filtered = self
+                    .cache
+                    .commits
+                    .iter()
                     .filter(|c| {
                         query.is_empty()
                             || c.sha.to_lowercase().contains(&query)
@@ -271,7 +293,7 @@ impl GitRefSelector {
             Constraint::Length(1), // mode tabs
             Constraint::Length(1), // input line
             Constraint::Length(1), // context line (commit / branch info)
-            Constraint::Min(0),   // dropdown
+            Constraint::Min(0),    // dropdown
         ])
         .split(inner);
 
@@ -347,7 +369,10 @@ impl GitRefSelector {
             let line = Line::from(vec![
                 Span::styled(format!(" {label}: "), Style::default().fg(p.text_tertiary)),
                 Span::styled(before.to_string(), Style::default().fg(p.text_bright)),
-                Span::styled(cursor_char, Style::default().fg(p.bg_base).bg(p.text_bright)),
+                Span::styled(
+                    cursor_char,
+                    Style::default().fg(p.bg_base).bg(p.text_bright),
+                ),
                 Span::styled(after.to_string(), Style::default().fg(p.text_bright)),
             ]);
             frame.render_widget(Paragraph::new(line), area);
@@ -365,17 +390,29 @@ impl GitRefSelector {
             RefMode::Branch => {
                 let branch = self.branch_input.value();
                 if let Some(entry) = self.cache.branches.iter().find(|b| b.name == branch) {
-                    (format!(" saves: {} ({})", short_sha(&entry.sha), branch), p.green_primary)
+                    (
+                        format!(" saves: {} ({})", short_sha(&entry.sha), branch),
+                        p.green_primary,
+                    )
                 } else if branch.is_empty() {
-                    (format!(" saves: HEAD ({})", self.cache.default_branch), p.text_tertiary)
+                    (
+                        format!(" saves: HEAD ({})", self.cache.default_branch),
+                        p.text_tertiary,
+                    )
                 } else {
-                    (" unknown branch — select from list".to_string(), p.yellow_warn)
+                    (
+                        " unknown branch — select from list".to_string(),
+                        p.yellow_warn,
+                    )
                 }
             }
             RefMode::Tag => {
                 let tag = self.tag_input.value();
                 if let Some(entry) = self.cache.tags.iter().find(|t| t.name == tag) {
-                    (format!(" saves: {} (tag {})", short_sha(&entry.sha), tag), p.green_primary)
+                    (
+                        format!(" saves: {} (tag {})", short_sha(&entry.sha), tag),
+                        p.green_primary,
+                    )
                 } else if tag.is_empty() {
                     (" select a tag from the list".to_string(), p.text_tertiary)
                 } else {
@@ -391,10 +428,7 @@ impl GitRefSelector {
                 }
             }
         };
-        frame.render_widget(
-            Paragraph::new(text).style(Style::default().fg(color)),
-            area,
-        );
+        frame.render_widget(Paragraph::new(text).style(Style::default().fg(color)), area);
     }
 
     fn render_dropdown(&self, frame: &mut Frame, area: Rect, p: &Palette) {
@@ -420,10 +454,7 @@ impl GitRefSelector {
 }
 
 /// Classify a git_ref string into a mode + initial field values.
-fn classify_ref(
-    current: &str,
-    cache: &RepoRefs,
-) -> (RefMode, String, String, String) {
+fn classify_ref(current: &str, cache: &RepoRefs) -> (RefMode, String, String, String) {
     if current.is_empty() {
         // Default: branch mode with default branch
         let sha = cache

@@ -6,17 +6,15 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use color_eyre::Result;
-use futures::StreamExt;
 use crossterm::event::EventStream;
-use ratatui::crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture,
-};
-use ratatui::crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
-use ratatui::crossterm::ExecutableCommand;
-use ratatui::prelude::*;
+use futures::StreamExt;
 use ratatui::Terminal;
+use ratatui::crossterm::ExecutableCommand;
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use ratatui::crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::prelude::*;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 

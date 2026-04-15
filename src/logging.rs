@@ -2,14 +2,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use color_eyre::Result;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 fn log_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".whoah").join("logs")
 }
-
 
 pub fn init(verbose: u8) -> Result<()> {
     let log_path = log_dir();
@@ -17,12 +16,10 @@ pub fn init(verbose: u8) -> Result<()> {
 
     let file_appender = tracing_appender::rolling::daily(&log_path, "whoah.log");
 
-    let env_filter = EnvFilter::try_from_env("WHOAH_LOG").unwrap_or_else(|_| {
-        match verbose {
-            0 => EnvFilter::new("whoah=info,whoah_cli=info"),
-            1 => EnvFilter::new("whoah=debug,whoah_cli=debug"),
-            _ => EnvFilter::new("whoah=trace,whoah_cli=trace"),
-        }
+    let env_filter = EnvFilter::try_from_env("WHOAH_LOG").unwrap_or_else(|_| match verbose {
+        0 => EnvFilter::new("whoah=info,whoah_cli=info"),
+        1 => EnvFilter::new("whoah=debug,whoah_cli=debug"),
+        _ => EnvFilter::new("whoah=trace,whoah_cli=trace"),
     });
 
     let file_layer = tracing_subscriber::fmt::layer()

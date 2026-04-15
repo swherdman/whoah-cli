@@ -1,6 +1,6 @@
 //! Proxmox VM management via SSH to the Proxmox host.
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 
 use crate::config::ProxmoxConfig;
 use crate::ssh::RemoteHost;

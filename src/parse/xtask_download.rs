@@ -12,11 +12,22 @@
 /// Parsed event from xtask download.
 #[derive(Debug, Clone, PartialEq)]
 pub enum XtaskEvent {
-    Starting { target: String },
-    Downloading { target: String, file: Option<String> },
-    Unpacking { target: String },
-    Complete { target: String },
-    Cached { target: String },
+    Starting {
+        target: String,
+    },
+    Downloading {
+        target: String,
+        file: Option<String>,
+    },
+    Unpacking {
+        target: String,
+    },
+    Complete {
+        target: String,
+    },
+    Cached {
+        target: String,
+    },
 }
 
 /// Try to parse a line of xtask download output.
@@ -45,7 +56,8 @@ pub fn parse_xtask_line(line: &str) -> Option<XtaskEvent> {
     }
 
     if line.contains("Downloading") {
-        let file = line.split("Downloading ")
+        let file = line
+            .split("Downloading ")
             .nth(1)
             .and_then(|s| s.split_whitespace().next())
             .map(|s| s.to_string());
@@ -57,9 +69,7 @@ pub fn parse_xtask_line(line: &str) -> Option<XtaskEvent> {
 
 fn extract_target(line: &str) -> Option<String> {
     // "..., target: Cockroach"
-    line.split("target: ")
-        .nth(1)
-        .map(|s| s.trim().to_string())
+    line.split("target: ").nth(1).map(|s| s.trim().to_string())
 }
 
 /// Tracks xtask download progress.
@@ -105,7 +115,10 @@ impl XtaskTracker {
             return format!("All {} tools downloaded", self.total_targets);
         }
         if let Some(ref target) = self.current_target {
-            format!("Downloading {target} ({}/{})", self.completed, self.total_targets)
+            format!(
+                "Downloading {target} ({}/{})",
+                self.completed, self.total_targets
+            )
         } else {
             format!("{}/{} tools", self.completed, self.total_targets)
         }
@@ -121,7 +134,9 @@ mod tests {
         let line = "Mar 18 06:17:14.090 INFO Starting download, target: Cockroach";
         assert_eq!(
             parse_xtask_line(line),
-            Some(XtaskEvent::Starting { target: "Cockroach".into() })
+            Some(XtaskEvent::Starting {
+                target: "Cockroach".into()
+            })
         );
     }
 
@@ -143,7 +158,9 @@ mod tests {
         let line = "Mar 18 06:24:04.483 INFO Download complete, target: MaghemiteMgd";
         assert_eq!(
             parse_xtask_line(line),
-            Some(XtaskEvent::Complete { target: "MaghemiteMgd".into() })
+            Some(XtaskEvent::Complete {
+                target: "MaghemiteMgd".into()
+            })
         );
     }
 
@@ -152,7 +169,9 @@ mod tests {
         let line = "Mar 18 09:35:57.852 INFO Already downloaded (out/downloads/cockroach.tgz), target: Cockroach";
         assert_eq!(
             parse_xtask_line(line),
-            Some(XtaskEvent::Cached { target: "Cockroach".into() })
+            Some(XtaskEvent::Cached {
+                target: "Cockroach".into()
+            })
         );
     }
 
@@ -161,7 +180,9 @@ mod tests {
         let line = "Mar 18 06:24:01.849 INFO Unpacking out/downloads/mgd.tar.gz to out/downloads, target: MaghemiteMgd";
         assert_eq!(
             parse_xtask_line(line),
-            Some(XtaskEvent::Unpacking { target: "MaghemiteMgd".into() })
+            Some(XtaskEvent::Unpacking {
+                target: "MaghemiteMgd".into()
+            })
         );
     }
 
@@ -175,14 +196,22 @@ mod tests {
     fn test_tracker() {
         let mut t = XtaskTracker::default();
 
-        t.update(&XtaskEvent::Starting { target: "Cockroach".into() });
-        t.update(&XtaskEvent::Starting { target: "Clickhouse".into() });
+        t.update(&XtaskEvent::Starting {
+            target: "Cockroach".into(),
+        });
+        t.update(&XtaskEvent::Starting {
+            target: "Clickhouse".into(),
+        });
         assert_eq!(t.total_targets, 2);
 
-        t.update(&XtaskEvent::Complete { target: "Cockroach".into() });
+        t.update(&XtaskEvent::Complete {
+            target: "Cockroach".into(),
+        });
         assert_eq!(t.summary(), "Downloading Clickhouse (1/2)");
 
-        t.update(&XtaskEvent::Complete { target: "Clickhouse".into() });
+        t.update(&XtaskEvent::Complete {
+            target: "Clickhouse".into(),
+        });
         assert_eq!(t.summary(), "All 2 tools downloaded");
     }
 

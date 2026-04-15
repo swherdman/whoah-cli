@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{Result, eyre::eyre};
 
 use super::types::*;
 
@@ -41,7 +41,11 @@ pub fn load_global_config() -> Result<GlobalConfig> {
 pub fn load_deployment(name: &str) -> Result<DeploymentConfig> {
     let dir = deployment_dir(name)?;
     if !dir.exists() {
-        return Err(eyre!("Deployment '{}' not found at {}", name, dir.display()));
+        return Err(eyre!(
+            "Deployment '{}' not found at {}",
+            name,
+            dir.display()
+        ));
     }
 
     let deployment_path = dir.join("deployment.toml");
@@ -49,9 +53,8 @@ pub fn load_deployment(name: &str) -> Result<DeploymentConfig> {
     let monitoring_path = dir.join("monitoring.toml");
 
     let deployment: DeploymentToml = {
-        let contents = fs::read_to_string(&deployment_path).map_err(|e| {
-            eyre!("Failed to read {}: {}", deployment_path.display(), e)
-        })?;
+        let contents = fs::read_to_string(&deployment_path)
+            .map_err(|e| eyre!("Failed to read {}: {}", deployment_path.display(), e))?;
         toml::from_str(&contents)?
     };
 

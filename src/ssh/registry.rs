@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-
 /// A point-in-time snapshot of an SSH session's state.
 #[derive(Debug, Clone)]
 pub struct SessionSnapshot {
@@ -103,19 +102,17 @@ pub fn all() -> Vec<SessionSnapshot> {
 
     let now = Instant::now();
     reg.iter()
-        .map(|(id, entry)| {
-            SessionSnapshot {
-                id: id.clone(),
-                destination: entry.destination.clone(),
-                label: entry.label.clone(),
-                connected: entry.connected,
-                connected_at: entry.connected_at,
-                uptime: now.duration_since(entry.connected_at),
-                command_count: entry.command_count,
-                last_command: entry.last_command.clone(),
-                last_command_ago: entry.last_command_at.map(|t| now.duration_since(t)),
-                last_error: entry.last_error.clone(),
-            }
+        .map(|(id, entry)| SessionSnapshot {
+            id: id.clone(),
+            destination: entry.destination.clone(),
+            label: entry.label.clone(),
+            connected: entry.connected,
+            connected_at: entry.connected_at,
+            uptime: now.duration_since(entry.connected_at),
+            command_count: entry.command_count,
+            last_command: entry.last_command.clone(),
+            last_command_ago: entry.last_command_at.map(|t| now.duration_since(t)),
+            last_error: entry.last_error.clone(),
         })
         .collect()
 }

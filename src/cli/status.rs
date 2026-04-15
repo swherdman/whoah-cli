@@ -9,12 +9,9 @@ pub async fn run(deployment: Option<&str>) -> Result<()> {
     let cfg = config::load_deployment(&deployment_name)?;
 
     // Use the first host (Phase 1: single host)
-    let host_config = cfg
-        .deployment
-        .hosts
-        .values()
-        .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("No hosts configured in deployment '{deployment_name}'"))?;
+    let host_config = cfg.deployment.hosts.values().next().ok_or_else(|| {
+        color_eyre::eyre::eyre!("No hosts configured in deployment '{deployment_name}'")
+    })?;
 
     eprintln!(
         "Connecting to {}@{}...",

@@ -20,9 +20,13 @@ use crate::tui::theme::Palette;
 
 enum EditMode {
     Viewing,
-    Editing { input: Input },
+    Editing {
+        input: Input,
+    },
     /// Popup picker for selecting from a list (type, node, storage, iso_file).
-    PickerSelect { picker: PopupPicker },
+    PickerSelect {
+        picker: PopupPicker,
+    },
     DeleteConfirm,
 }
 
@@ -165,38 +169,55 @@ impl HypervisorPanel {
 
         // Fields that use pickers instead of free-text input
         let picker = match field_path {
-            "hypervisor.type" => {
-                Some(PopupPicker::new("Select hypervisor type", vec!["proxmox".to_string()]))
-            }
+            "hypervisor.type" => Some(PopupPicker::new(
+                "Select hypervisor type",
+                vec!["proxmox".to_string()],
+            )),
             "proxmox.node" => {
-                let options = self.proxmox_validation.as_ref()
+                let options = self
+                    .proxmox_validation
+                    .as_ref()
                     .map(|v| v.available_nodes.clone())
                     .unwrap_or_default();
-                if options.is_empty() { None } else {
+                if options.is_empty() {
+                    None
+                } else {
                     Some(PopupPicker::new("Select node", options))
                 }
             }
             "proxmox.disk_storage" => {
-                let options = self.proxmox_validation.as_ref()
+                let options = self
+                    .proxmox_validation
+                    .as_ref()
                     .map(|v| v.available_disk_storages.clone())
                     .unwrap_or_default();
-                if options.is_empty() { None } else {
+                if options.is_empty() {
+                    None
+                } else {
                     Some(PopupPicker::new("Select disk storage", options))
                 }
             }
             "proxmox.iso_storage" => {
-                let options = self.proxmox_validation.as_ref()
+                let options = self
+                    .proxmox_validation
+                    .as_ref()
                     .map(|v| v.available_iso_storages.clone())
                     .unwrap_or_default();
-                if options.is_empty() { None } else {
+                if options.is_empty() {
+                    None
+                } else {
                     Some(PopupPicker::new("Select ISO storage", options))
                 }
             }
             "proxmox.iso_file" => {
-                let options = self.proxmox_validation.as_ref()
+                let options = self
+                    .proxmox_validation
+                    .as_ref()
                     .map(|v| v.available_iso_files.clone())
                     .unwrap_or_default();
-                if options.is_empty() { None } else {
+                if options.is_empty() {
+                    None
+                } else {
                     Some(PopupPicker::new("Select ISO file", options))
                 }
             }
@@ -224,7 +245,9 @@ impl HypervisorPanel {
         };
         let new_value = input.value().to_string();
         // Capture the field path before changing edit_mode
-        let field_path = self.lines.get(self.selected)
+        let field_path = self
+            .lines
+            .get(self.selected)
             .and_then(|l| l.field.as_ref())
             .map(|f| f.path.clone());
         self.edit_mode = EditMode::Viewing;
@@ -233,7 +256,10 @@ impl HypervisorPanel {
         let path = field_path.as_deref().unwrap_or("");
 
         // Re-probe SSH if a credential field was edited
-        if path == "credentials.host" || path == "credentials.ssh_user" || path == "credentials.ssh_port" {
+        if path == "credentials.host"
+            || path == "credentials.ssh_user"
+            || path == "credentials.ssh_port"
+        {
             return Ok(self.request_probe());
         }
 
@@ -279,7 +305,9 @@ impl HypervisorPanel {
     }
 
     fn start_download(&mut self) -> PanelEvent {
-        let storage_path = self.proxmox_validation.as_ref()
+        let storage_path = self
+            .proxmox_validation
+            .as_ref()
             .and_then(|v| v.iso_storage_path.clone());
         let Some(storage_path) = storage_path else {
             return PanelEvent::Action(PanelAction::Error(
@@ -317,9 +345,7 @@ impl HypervisorPanel {
     fn confirm_delete(&mut self) -> PanelEvent {
         self.edit_mode = EditMode::Viewing;
         if let Err(e) = delete_hypervisor(&self.name) {
-            return PanelEvent::Action(PanelAction::Error(format!(
-                "Failed to delete: {e}"
-            )));
+            return PanelEvent::Action(PanelAction::Error(format!("Failed to delete: {e}")));
         }
         PanelEvent::Action(PanelAction::Deleted {
             name: self.name.clone(),
@@ -338,7 +364,9 @@ impl HypervisorPanel {
             }
             PopupAction::Selected(_, value) => {
                 // Check if this is a Proxmox field before clearing edit mode
-                let is_proxmox_field = self.lines.get(self.selected)
+                let is_proxmox_field = self
+                    .lines
+                    .get(self.selected)
                     .and_then(|l| l.field.as_ref())
                     .map(|f| f.path.starts_with("proxmox."))
                     .unwrap_or(false);
@@ -426,7 +454,12 @@ impl HypervisorPanel {
             "credentials.ssh_user",
         );
         {
-            let port_str = self.config.credentials.ssh_port.map(|p| p.to_string()).unwrap_or_else(|| "22".to_string());
+            let port_str = self
+                .config
+                .credentials
+                .ssh_port
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "22".to_string());
             push_editable(
                 &mut lines,
                 "ssh_port",
@@ -444,11 +477,11 @@ impl HypervisorPanel {
             let p = Palette::default();
             let show_download = match &self.download_state {
                 DownloadState::Downloading { .. } | DownloadState::Failed(_) => true,
-                DownloadState::Idle => {
-                    self.proxmox_validation.as_ref()
-                        .map(|v| matches!(v.iso_file, FieldStatus::Invalid(_)))
-                        .unwrap_or(false)
-                }
+                DownloadState::Idle => self
+                    .proxmox_validation
+                    .as_ref()
+                    .map(|v| matches!(v.iso_file, FieldStatus::Invalid(_)))
+                    .unwrap_or(false),
             };
 
             if show_download {
@@ -560,14 +593,38 @@ fn build_proxmox_section(
 ) {
     push_header(lines, "PROXMOX");
     if let Some(px) = &config.proxmox {
-        push_validated_field(lines, "node", &px.node, "hypervisor", "proxmox.node",
-            validation.map(|v| &v.node));
-        push_validated_field(lines, "disk_storage", &px.disk_storage, "hypervisor", "proxmox.disk_storage",
-            validation.map(|v| &v.disk_storage));
-        push_validated_field(lines, "iso_storage", &px.iso_storage, "hypervisor", "proxmox.iso_storage",
-            validation.map(|v| &v.iso_storage));
-        push_validated_field(lines, "iso_file", &px.iso_file, "hypervisor", "proxmox.iso_file",
-            validation.map(|v| &v.iso_file));
+        push_validated_field(
+            lines,
+            "node",
+            &px.node,
+            "hypervisor",
+            "proxmox.node",
+            validation.map(|v| &v.node),
+        );
+        push_validated_field(
+            lines,
+            "disk_storage",
+            &px.disk_storage,
+            "hypervisor",
+            "proxmox.disk_storage",
+            validation.map(|v| &v.disk_storage),
+        );
+        push_validated_field(
+            lines,
+            "iso_storage",
+            &px.iso_storage,
+            "hypervisor",
+            "proxmox.iso_storage",
+            validation.map(|v| &v.iso_storage),
+        );
+        push_validated_field(
+            lines,
+            "iso_file",
+            &px.iso_file,
+            "hypervisor",
+            "proxmox.iso_file",
+            validation.map(|v| &v.iso_file),
+        );
     } else {
         push_field(lines, "error", "Missing [proxmox] section");
     }
@@ -624,13 +681,11 @@ impl ConfigPanel for HypervisorPanel {
         // Inline text editing
         if let EditMode::Editing { .. } = self.edit_mode {
             match key.code {
-                KeyCode::Enter => {
-                    match self.confirm_edit() {
-                        Err(msg) => return PanelEvent::Action(PanelAction::Error(msg)),
-                        Ok(Some(action)) => return PanelEvent::Action(action),
-                        Ok(None) => {}
-                    }
-                }
+                KeyCode::Enter => match self.confirm_edit() {
+                    Err(msg) => return PanelEvent::Action(PanelAction::Error(msg)),
+                    Ok(Some(action)) => return PanelEvent::Action(action),
+                    Ok(None) => {}
+                },
                 KeyCode::Esc => self.edit_mode = EditMode::Viewing,
                 _ => {
                     if let EditMode::Editing { ref mut input } = self.edit_mode {
@@ -686,18 +741,25 @@ impl ConfigPanel for HypervisorPanel {
 
         if delete_confirm {
             // Render lines with the delete line replaced by confirmation text
-            let modified_lines: Vec<DetailLine> = self.lines.iter().map(|line| {
-                if line.action == Some(LineAction::DeleteHypervisor) {
-                    DetailLine {
-                        text: format!("  Delete {}? Enter to confirm, Esc to cancel", self.name),
-                        style: DetailStyle::DangerAction,
-                        action: Some(LineAction::DeleteHypervisor),
-                        ..line.clone()
+            let modified_lines: Vec<DetailLine> = self
+                .lines
+                .iter()
+                .map(|line| {
+                    if line.action == Some(LineAction::DeleteHypervisor) {
+                        DetailLine {
+                            text: format!(
+                                "  Delete {}? Enter to confirm, Esc to cancel",
+                                self.name
+                            ),
+                            style: DetailStyle::DangerAction,
+                            action: Some(LineAction::DeleteHypervisor),
+                            ..line.clone()
+                        }
+                    } else {
+                        line.clone()
                     }
-                } else {
-                    line.clone()
-                }
-            }).collect();
+                })
+                .collect();
 
             let vis_h = render_detail_lines(
                 frame,

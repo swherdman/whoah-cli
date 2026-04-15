@@ -13,8 +13,8 @@ use tokio::time::timeout;
 
 // Import from our crate
 use whoah::config::HostConfig;
-use whoah::ssh::session::SshHost;
 use whoah::ssh::RemoteHost;
+use whoah::ssh::session::SshHost;
 
 use whoah::event::BuildEvent;
 use whoah::ops::ssh_log::LoggedSsh;
@@ -48,7 +48,10 @@ async fn test_command_after_streaming() {
 
     let stream_result = timeout(
         Duration::from_secs(30),
-        host.execute_streaming("for i in 1 2 3 4 5 6 7 8 9 10; do echo line_$i; sleep 1; done", tx),
+        host.execute_streaming(
+            "for i in 1 2 3 4 5 6 7 8 9 10; do echo line_$i; sleep 1; done",
+            tx,
+        ),
     )
     .await
     .expect("streaming timeout")
@@ -64,10 +67,13 @@ async fn test_command_after_streaming() {
 
     // Step 3: Regular command immediately after — THIS IS WHERE THE HANG OCCURS
     println!("Step 3: Regular command after streaming...");
-    let out = timeout(Duration::from_secs(10), host.execute("echo after_streaming"))
-        .await
-        .expect("TIMEOUT - session hung after streaming!")
-        .expect("execute failed");
+    let out = timeout(
+        Duration::from_secs(10),
+        host.execute("echo after_streaming"),
+    )
+    .await
+    .expect("TIMEOUT - session hung after streaming!")
+    .expect("execute failed");
     assert_eq!(out.stdout.trim(), "after_streaming");
     println!("  OK: {}", out.stdout.trim());
 
@@ -144,10 +150,13 @@ async fn test_logged_ssh_streaming_then_run() {
 
     // Step 3: Regular run immediately after — the critical test
     println!("Step 3: LoggedSsh::run after streaming...");
-    let out = timeout(Duration::from_secs(10), ssh.run("echo after_logged_streaming"))
-        .await
-        .expect("TIMEOUT - LoggedSsh hung after streaming!")
-        .expect("run failed");
+    let out = timeout(
+        Duration::from_secs(10),
+        ssh.run("echo after_logged_streaming"),
+    )
+    .await
+    .expect("TIMEOUT - LoggedSsh hung after streaming!")
+    .expect("run failed");
     println!("  OK: {}", out.stdout.trim());
     assert_eq!(out.stdout.trim(), "after_logged_streaming");
 

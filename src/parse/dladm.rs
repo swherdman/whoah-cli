@@ -28,7 +28,10 @@ mod tests {
 
     #[test]
     fn test_parse_with_whitespace() {
-        assert_eq!(parse_ether_link("  e1000g0  \n"), Some("e1000g0".to_string()));
+        assert_eq!(
+            parse_ether_link("  e1000g0  \n"),
+            Some("e1000g0".to_string())
+        );
     }
 
     #[test]
@@ -40,10 +43,7 @@ mod tests {
     #[test]
     fn test_parse_multiple_links() {
         // Takes the first one
-        assert_eq!(
-            parse_ether_link("igb0\nigb1\n"),
-            Some("igb0".to_string())
-        );
+        assert_eq!(parse_ether_link("igb0\nigb1\n"), Some("igb0".to_string()));
     }
 
     #[test]

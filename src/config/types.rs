@@ -793,10 +793,7 @@ disk_gb = 256
         };
         let s = toml::to_string_pretty(&state).unwrap();
         let parsed: DeploymentState = toml::from_str(&s).unwrap();
-        assert_eq!(
-            parsed.drift.unwrap().last_checked,
-            "2026-03-18T14:30:00Z"
-        );
+        assert_eq!(parsed.drift.unwrap().last_checked, "2026-03-18T14:30:00Z");
 
         // Empty state
         let empty = DeploymentState::default();
