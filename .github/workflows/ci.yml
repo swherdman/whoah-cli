@@ -11,41 +11,16 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -- --deny warnings
-
+  # Fast, compile-free gates — run first in parallel to fail quickly
   fmt:
     name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
-      - uses: Swatinem/rust-cache@v2
+        with:
+          toolchain: stable
+          components: rustfmt
       - run: cargo fmt --check
 
   deny:
@@ -54,3 +29,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # Full compile — runs after fmt passes; covers cargo check implicitly
+  clippy:
+    name: Clippy
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -- --deny warnings
+
+  # Tests reuse the warm cache from the clippy compile
+  test:
+    name: Test
+    needs: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run
