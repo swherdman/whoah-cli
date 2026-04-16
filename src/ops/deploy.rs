@@ -628,10 +628,11 @@ async fn run_provision(
             }
             // Extract IP (format: "192.168.2.x/24" or just "192.168.2.x")
             if let Some(ip) = trimmed.split('/').next()
-                && is_ipv4(ip) {
-                    ip_address = ip.to_string();
-                    break;
-                }
+                && is_ipv4(ip)
+            {
+                ip_address = ip.to_string();
+                break;
+            }
         }
 
         if !ip_address.is_empty() {
@@ -826,12 +827,13 @@ async fn generate_userdata_script() -> Result<String> {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("pub")
-                    && let Ok(content) = tokio::fs::read_to_string(&path).await {
-                        keys.push_str(&content);
-                        if !content.ends_with('\n') {
-                            keys.push('\n');
-                        }
+                    && let Ok(content) = tokio::fs::read_to_string(&path).await
+                {
+                    keys.push_str(&content);
+                    if !content.ends_with('\n') {
+                        keys.push('\n');
                     }
+                }
             }
         }
         if keys.is_empty() {
@@ -1004,7 +1006,8 @@ async fn continue_os_setup_after_reboot(
     let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/OS-setup");
     let mut ssh =
-        crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.to_path_buf(), tx, "os-cleanup").await?;
+        crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.to_path_buf(), tx, "os-cleanup")
+            .await?;
 
     // Re-set pkg publisher and HTTPS proxy (new BE has original publisher)
     ssh.detail("Re-setting caches after reboot...").await;
@@ -1491,12 +1494,13 @@ print('Updated vdevs to {vdev_count}')
             match result {
                 Ok(output) if output.exit_code == 0 => {
                     if let Ok(total) = output.stdout.trim().parse::<u32>()
-                        && total > 0 {
-                            let _ = count_tx.send(BuildEvent::CrateCount {
-                                step_id: "build-compile".into(),
-                                total,
-                            });
-                        }
+                        && total > 0
+                    {
+                        let _ = count_tx.send(BuildEvent::CrateCount {
+                            step_id: "build-compile".into(),
+                            total,
+                        });
+                    }
                 }
                 _ => tracing::debug!("cargo tree query failed (non-fatal)"),
             }
@@ -2056,12 +2060,14 @@ async fn run_setup_pkg_cache(
         ),
     );
 
-    let cache_info = crate::ops::pkg_cache::ensure_caches().await.inspect_err(|e| {
-        send(
-            tx,
-            BuildEvent::StepFailed("cache-start".into(), e.to_string()),
-        );
-    })?;
+    let cache_info = crate::ops::pkg_cache::ensure_caches()
+        .await
+        .inspect_err(|e| {
+            send(
+                tx,
+                BuildEvent::StepFailed("cache-start".into(), e.to_string()),
+            );
+        })?;
 
     let nginx_status = if cache_info.nginx_was_running {
         "already running"

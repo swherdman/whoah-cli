@@ -246,10 +246,10 @@ fn is_post_reboot_from_parts(
     if let Some(state) = baseline
         && (*state == services::ServiceState::Offline
             || *state == services::ServiceState::Maintenance)
-        {
-            // Only flag if there are also no zones
-            return running_zones == 0;
-        }
+    {
+        // Only flag if there are also no zones
+        return running_zones == 0;
+    }
     false
 }
 

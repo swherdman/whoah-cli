@@ -53,10 +53,7 @@ pub async fn run(deployment: Option<&str>) -> Result<()> {
     // Since we can't send &host across spawn boundary, run in the same task
     // using select to drain events while recovery runs
     let (result, _) = tokio::join!(
-        async {
-            
-            run_recovery(host_ref, &params_clone, tx, cancel_clone).await
-        },
+        async { run_recovery(host_ref, &params_clone, tx, cancel_clone).await },
         async {
             while let Some(event) = rx.recv().await {
                 print_event(&event);

@@ -301,10 +301,11 @@ impl ConfigView {
             KeyCode::Char('h') | KeyCode::Left => {
                 if self.focus == ConfigFocus::RightPanel {
                     if let Some(panel) = self.active_panel_mut()
-                        && let PanelEvent::Ignored = panel.handle_key(key) {
-                            // Panel didn't handle it — move to left panel
-                            self.focus = ConfigFocus::LeftPanel;
-                        }
+                        && let PanelEvent::Ignored = panel.handle_key(key)
+                    {
+                        // Panel didn't handle it — move to left panel
+                        self.focus = ConfigFocus::LeftPanel;
+                    }
                     ConfigViewEvent::Consumed
                 } else {
                     ConfigViewEvent::Ignored
@@ -386,15 +387,16 @@ impl ConfigView {
 
         if trigger_proxmox
             && let ActivePanel::Hypervisor(panel) = &mut self.active_panel
-                && panel.proxmox_config().is_some() {
-                    let host = panel.credentials_host().to_string();
-                    let user = panel.credentials_user().to_string();
-                    let port = panel.credentials_port();
-                    if !host.is_empty() {
-                        panel.set_proxmox_checking();
-                        return Some(ConfigViewEvent::ValidateProxmox { host, user, port });
-                    }
-                }
+            && panel.proxmox_config().is_some()
+        {
+            let host = panel.credentials_host().to_string();
+            let user = panel.credentials_user().to_string();
+            let port = panel.credentials_port();
+            if !host.is_empty() {
+                panel.set_proxmox_checking();
+                return Some(ConfigViewEvent::ValidateProxmox { host, user, port });
+            }
+        }
         None
     }
 
@@ -436,9 +438,10 @@ impl ConfigView {
     /// Reload the currently selected deployment panel from disk.
     pub fn reload_active_deployment(&mut self) {
         if let Some(idx) = self.deployment_list_state.selected()
-            && idx < self.deployments.len() {
-                self.load_selected_deployment();
-            }
+            && idx < self.deployments.len()
+        {
+            self.load_selected_deployment();
+        }
     }
 
     /// Update prerequisite check results.
@@ -699,39 +702,42 @@ impl ConfigView {
 
     fn load_selected_deployment(&mut self) {
         if let Some(idx) = self.deployment_list_state.selected()
-            && let Some(name) = self.deployments.get(idx).cloned() {
-                match load_deployment(&name) {
-                    Ok(config) => {
-                        let state = load_deployment_state(&name).unwrap_or_default();
-                        let hyp = config
-                            .deployment
-                            .hypervisor
-                            .as_ref()
-                            .and_then(|href| load_hypervisor(&href.hypervisor_ref).ok());
-                        self.active_panel =
-                            ActivePanel::Deployment(Box::new(DeploymentPanel::new(name, config, hyp, state)));
-                    }
-                    Err(e) => {
-                        self.active_panel = ActivePanel::Prompt(format!("Error loading: {e}"));
-                    }
+            && let Some(name) = self.deployments.get(idx).cloned()
+        {
+            match load_deployment(&name) {
+                Ok(config) => {
+                    let state = load_deployment_state(&name).unwrap_or_default();
+                    let hyp = config
+                        .deployment
+                        .hypervisor
+                        .as_ref()
+                        .and_then(|href| load_hypervisor(&href.hypervisor_ref).ok());
+                    self.active_panel = ActivePanel::Deployment(Box::new(DeploymentPanel::new(
+                        name, config, hyp, state,
+                    )));
+                }
+                Err(e) => {
+                    self.active_panel = ActivePanel::Prompt(format!("Error loading: {e}"));
                 }
             }
+        }
     }
 
     fn load_selected_hypervisor(&mut self) {
         if let Some(idx) = self.hypervisor_list_state.selected()
-            && let Some(name) = self.hypervisors.get(idx).cloned() {
-                match load_hypervisor(&name) {
-                    Ok(config) => {
-                        let refs = find_referencing_deployments(&name).unwrap_or_default();
-                        self.active_panel =
-                            ActivePanel::Hypervisor(Box::new(HypervisorPanel::new(name, config, refs)));
-                    }
-                    Err(e) => {
-                        self.active_panel = ActivePanel::Prompt(format!("Error loading: {e}"));
-                    }
+            && let Some(name) = self.hypervisors.get(idx).cloned()
+        {
+            match load_hypervisor(&name) {
+                Ok(config) => {
+                    let refs = find_referencing_deployments(&name).unwrap_or_default();
+                    self.active_panel =
+                        ActivePanel::Hypervisor(Box::new(HypervisorPanel::new(name, config, refs)));
+                }
+                Err(e) => {
+                    self.active_panel = ActivePanel::Prompt(format!("Error loading: {e}"));
                 }
             }
+        }
     }
 
     /// Handle HypervisorDeleted event — refresh list, select something else.

@@ -145,7 +145,9 @@ impl App {
             // Populate Monitor screen with fake status data
             if let Some(tx) = &self.app_event_tx {
                 let status = crate::ops::demo::demo_status(&self.config);
-                let _ = tx.send(Event::App(Box::new(AppEvent::StatusUpdated(Box::new(status)))));
+                let _ = tx.send(Event::App(Box::new(AppEvent::StatusUpdated(Box::new(
+                    status,
+                )))));
             }
             let address = self
                 .config
@@ -831,7 +833,8 @@ impl App {
             BuildEvent::StepStarted(id) => {
                 let name = self
                     .pipeline
-                    .find_step(id).map(|(pi, si)| self.pipeline.phases[pi].steps[si].name)
+                    .find_step(id)
+                    .map(|(pi, si)| self.pipeline.phases[pi].steps[si].name)
                     .unwrap_or("unknown");
                 self.pipeline.start_step(id);
                 tracing::info!("Build: starting {name}");
@@ -883,15 +886,17 @@ impl App {
                             None
                         }
                     }
-                    "os-update" | "os-packages" => {
-                        pkg_progress::parse_pkg_line(detail).map(|event| pkg_progress::format_pkg_event(&event))
-                    }
+                    "os-update" | "os-packages" => pkg_progress::parse_pkg_line(detail)
+                        .map(|event| pkg_progress::format_pkg_event(&event)),
                     "build-prereqs-builder" | "build-prereqs-runner" => {
                         // Parse both pkg and xtask output
                         if let Some(event) = xtask_download::parse_xtask_line(detail) {
                             self.xtask_tracker.update(&event);
                             Some(self.xtask_tracker.summary())
-                        } else { pkg_progress::parse_pkg_line(detail).map(|event| pkg_progress::format_pkg_event(&event)) }
+                        } else {
+                            pkg_progress::parse_pkg_line(detail)
+                                .map(|event| pkg_progress::format_pkg_event(&event))
+                        }
                     }
                     _ => None,
                 };
@@ -900,17 +905,19 @@ impl App {
                 // otherwise use the raw detail
                 let display = summary.unwrap_or_else(|| detail.clone());
                 if let Some(step) = self.pipeline.step_mut(id)
-                    && let crate::ops::pipeline::StepStatus::Running { started, .. } = step.status {
-                        step.status = crate::ops::pipeline::StepStatus::Running {
-                            started,
-                            detail: Some(display),
-                        };
-                    }
+                    && let crate::ops::pipeline::StepStatus::Running { started, .. } = step.status
+                {
+                    step.status = crate::ops::pipeline::StepStatus::Running {
+                        started,
+                        detail: Some(display),
+                    };
+                }
             }
             BuildEvent::StepCompleted(id) => {
                 let name = self
                     .pipeline
-                    .find_step(id).map(|(pi, si)| self.pipeline.phases[pi].steps[si].name)
+                    .find_step(id)
+                    .map(|(pi, si)| self.pipeline.phases[pi].steps[si].name)
                     .unwrap_or("unknown");
                 self.pipeline.complete_step(id);
 
@@ -1026,7 +1033,9 @@ impl App {
             let host_ref: &dyn RemoteHost = host.as_ref();
             match gather_status(host_ref, &config).await {
                 Ok(status) => {
-                    let _ = tx.send(Event::App(Box::new(AppEvent::StatusUpdated(Box::new(status)))));
+                    let _ = tx.send(Event::App(Box::new(AppEvent::StatusUpdated(Box::new(
+                        status,
+                    )))));
                 }
                 Err(e) => {
                     tracing::error!("Status poll failed: {e}");
@@ -1325,10 +1334,11 @@ impl App {
             let filename_progress = filename.clone();
             let progress_forwarder = tokio::spawn(async move {
                 while let Some(progress) = progress_rx.recv().await {
-                    let _ = event_tx_progress.send(Event::App(Box::new(AppEvent::DownloadProgress {
-                        filename: filename_progress.clone(),
-                        percent: progress.percent,
-                    })));
+                    let _ =
+                        event_tx_progress.send(Event::App(Box::new(AppEvent::DownloadProgress {
+                            filename: filename_progress.clone(),
+                            percent: progress.percent,
+                        })));
                 }
             });
 
@@ -1346,7 +1356,10 @@ impl App {
             // Wait for progress forwarder to finish
             let _ = progress_forwarder.await;
 
-            let _ = event_tx.send(Event::App(Box::new(AppEvent::IsoDownloadResult { filename, result })));
+            let _ = event_tx.send(Event::App(Box::new(AppEvent::IsoDownloadResult {
+                filename,
+                result,
+            })));
         });
     }
 

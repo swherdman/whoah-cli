@@ -257,33 +257,33 @@ impl DeploymentPanel {
         // Re-probe if a host credential field was edited (e.g. "hosts.helios01.address")
         if let Some(path) = field_path
             && path.starts_with("hosts.")
-                && (path.ends_with(".address")
-                    || path.ends_with(".ssh_user")
-                    || path.ends_with(".ssh_port"))
-            {
-                // Extract host name from path like "hosts.helios01.address"
-                let parts: Vec<&str> = path.split('.').collect();
-                if parts.len() >= 2 {
-                    let host_name = parts[1];
-                    let probe_target = self
-                        .config
-                        .deployment
-                        .hosts
-                        .get(host_name)
-                        .filter(|h| !h.address.is_empty())
-                        .map(|h| (h.address.clone(), h.ssh_user.clone(), h.ssh_port()));
-                    if let Some((address, ssh_user, port)) = probe_target {
-                        self.ssh_status
-                            .insert(host_name.to_string(), SshProbeStatus::Checking);
-                        self.rebuild_detail_lines();
-                        return Ok(Some(PanelAction::ProbeSsh {
-                            host: address,
-                            user: ssh_user,
-                            port,
-                        }));
-                    }
+            && (path.ends_with(".address")
+                || path.ends_with(".ssh_user")
+                || path.ends_with(".ssh_port"))
+        {
+            // Extract host name from path like "hosts.helios01.address"
+            let parts: Vec<&str> = path.split('.').collect();
+            if parts.len() >= 2 {
+                let host_name = parts[1];
+                let probe_target = self
+                    .config
+                    .deployment
+                    .hosts
+                    .get(host_name)
+                    .filter(|h| !h.address.is_empty())
+                    .map(|h| (h.address.clone(), h.ssh_user.clone(), h.ssh_port()));
+                if let Some((address, ssh_user, port)) = probe_target {
+                    self.ssh_status
+                        .insert(host_name.to_string(), SshProbeStatus::Checking);
+                    self.rebuild_detail_lines();
+                    return Ok(Some(PanelAction::ProbeSsh {
+                        host: address,
+                        user: ssh_user,
+                        port,
+                    }));
                 }
             }
+        }
         Ok(None)
     }
 
@@ -474,80 +474,81 @@ impl DeploymentPanel {
         }
 
         if let Some(href) = &d.hypervisor
-            && let Some(vm) = &href.vm {
-                push_header(&mut host_tab, "VM");
-                push_field(&mut host_tab, "hypervisor", &href.hypervisor_ref);
-                push_editable(
-                    &mut host_tab,
-                    "vmid",
-                    &vm.vmid.to_string(),
-                    "deployment",
-                    "hypervisor.vm.vmid",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "name",
-                    &vm.name,
-                    "deployment",
-                    "hypervisor.vm.name",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "cores",
-                    &vm.cores.to_string(),
-                    "deployment",
-                    "hypervisor.vm.cores",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "sockets",
-                    &vm.sockets.to_string(),
-                    "deployment",
-                    "hypervisor.vm.sockets",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "memory_mb",
-                    &vm.memory_mb.to_string(),
-                    "deployment",
-                    "hypervisor.vm.memory_mb",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "disk_gb",
-                    &vm.disk_gb.to_string(),
-                    "deployment",
-                    "hypervisor.vm.disk_gb",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "disk_bus",
-                    &vm.disk_bus,
-                    "deployment",
-                    "hypervisor.vm.disk_bus",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "cpu_type",
-                    &vm.cpu_type,
-                    "deployment",
-                    "hypervisor.vm.cpu_type",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "net_model",
-                    &vm.net_model,
-                    "deployment",
-                    "hypervisor.vm.net_model",
-                );
-                push_editable(
-                    &mut host_tab,
-                    "net_bridge",
-                    &vm.net_bridge,
-                    "deployment",
-                    "hypervisor.vm.net_bridge",
-                );
-            }
+            && let Some(vm) = &href.vm
+        {
+            push_header(&mut host_tab, "VM");
+            push_field(&mut host_tab, "hypervisor", &href.hypervisor_ref);
+            push_editable(
+                &mut host_tab,
+                "vmid",
+                &vm.vmid.to_string(),
+                "deployment",
+                "hypervisor.vm.vmid",
+            );
+            push_editable(
+                &mut host_tab,
+                "name",
+                &vm.name,
+                "deployment",
+                "hypervisor.vm.name",
+            );
+            push_editable(
+                &mut host_tab,
+                "cores",
+                &vm.cores.to_string(),
+                "deployment",
+                "hypervisor.vm.cores",
+            );
+            push_editable(
+                &mut host_tab,
+                "sockets",
+                &vm.sockets.to_string(),
+                "deployment",
+                "hypervisor.vm.sockets",
+            );
+            push_editable(
+                &mut host_tab,
+                "memory_mb",
+                &vm.memory_mb.to_string(),
+                "deployment",
+                "hypervisor.vm.memory_mb",
+            );
+            push_editable(
+                &mut host_tab,
+                "disk_gb",
+                &vm.disk_gb.to_string(),
+                "deployment",
+                "hypervisor.vm.disk_gb",
+            );
+            push_editable(
+                &mut host_tab,
+                "disk_bus",
+                &vm.disk_bus,
+                "deployment",
+                "hypervisor.vm.disk_bus",
+            );
+            push_editable(
+                &mut host_tab,
+                "cpu_type",
+                &vm.cpu_type,
+                "deployment",
+                "hypervisor.vm.cpu_type",
+            );
+            push_editable(
+                &mut host_tab,
+                "net_model",
+                &vm.net_model,
+                "deployment",
+                "hypervisor.vm.net_model",
+            );
+            push_editable(
+                &mut host_tab,
+                "net_bridge",
+                &vm.net_bridge,
+                "deployment",
+                "hypervisor.vm.net_bridge",
+            );
+        }
 
         // ── Network tab ──
         let mut network_tab = Vec::new();

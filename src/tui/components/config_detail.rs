@@ -322,11 +322,10 @@ pub fn render_detail_lines(
             let is_selected = i == selected && is_focused;
             let is_editing = is_selected && edit_input.is_some();
 
-            if is_editing
-                && let Some(input) = edit_input {
-                    let label = dl.text.split(':').next().unwrap_or("    ?");
-                    return render_input_line(input, label, p);
-                }
+            if is_editing && let Some(input) = edit_input {
+                let label = dl.text.split(':').next().unwrap_or("    ?");
+                return render_input_line(input, label, p);
+            }
 
             let mut base_style = match dl.style {
                 DetailStyle::SectionHeader => Style::default()

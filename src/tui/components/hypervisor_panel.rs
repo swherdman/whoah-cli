@@ -485,49 +485,48 @@ impl HypervisorPanel {
                     .unwrap_or(false),
             };
 
-            if show_download
-                && let Some(px) = &self.config.proxmox {
-                    // Spacer
-                    lines.push(DetailLine {
-                        text: String::new(),
-                        style: DetailStyle::SectionHeader,
-                        field: None,
-                        raw_value: None,
-                        picker: None,
-                        action: None,
-                        fg_override: None,
-                        suffix: None,
-                    });
+            if show_download && let Some(px) = &self.config.proxmox {
+                // Spacer
+                lines.push(DetailLine {
+                    text: String::new(),
+                    style: DetailStyle::SectionHeader,
+                    field: None,
+                    raw_value: None,
+                    picker: None,
+                    action: None,
+                    fg_override: None,
+                    suffix: None,
+                });
 
-                    let (text, color, action) = match &self.download_state {
-                        DownloadState::Idle => (
-                            format!("  Download {}", px.iso_file),
-                            p.green_primary,
-                            Some(LineAction::DownloadIso),
-                        ),
-                        DownloadState::Downloading { percent } => (
-                            format!("  Downloading... {percent:.1}%"),
-                            p.yellow_warn,
-                            None,
-                        ),
-                        DownloadState::Failed(msg) => (
-                            format!("  Download failed: {msg}"),
-                            p.red_error,
-                            Some(LineAction::DownloadIso), // Allow retry
-                        ),
-                    };
+                let (text, color, action) = match &self.download_state {
+                    DownloadState::Idle => (
+                        format!("  Download {}", px.iso_file),
+                        p.green_primary,
+                        Some(LineAction::DownloadIso),
+                    ),
+                    DownloadState::Downloading { percent } => (
+                        format!("  Downloading... {percent:.1}%"),
+                        p.yellow_warn,
+                        None,
+                    ),
+                    DownloadState::Failed(msg) => (
+                        format!("  Download failed: {msg}"),
+                        p.red_error,
+                        Some(LineAction::DownloadIso), // Allow retry
+                    ),
+                };
 
-                    lines.push(DetailLine {
-                        text,
-                        style: DetailStyle::EditableField,
-                        field: None,
-                        raw_value: None,
-                        picker: None,
-                        action,
-                        fg_override: Some(color),
-                        suffix: None,
-                    });
-                }
+                lines.push(DetailLine {
+                    text,
+                    style: DetailStyle::EditableField,
+                    field: None,
+                    raw_value: None,
+                    picker: None,
+                    action,
+                    fg_override: Some(color),
+                    suffix: None,
+                });
+            }
         }
 
         // Delete action

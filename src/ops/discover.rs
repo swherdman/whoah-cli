@@ -242,12 +242,13 @@ pub fn parse_rust_constant(grep_output: &str) -> Option<u32> {
     }
     if let Some(start) = line.rfind('(')
         && let Some(end) = line.rfind(')')
-            && start < end {
-                let inner = line[start + 1..end].trim();
-                if let Ok(n) = inner.parse::<u32>() {
-                    return Some(n);
-                }
-            }
+        && start < end
+    {
+        let inner = line[start + 1..end].trim();
+        if let Ok(n) = inner.parse::<u32>() {
+            return Some(n);
+        }
+    }
     None
 }
 

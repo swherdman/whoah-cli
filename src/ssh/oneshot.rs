@@ -60,9 +60,7 @@ pub async fn one_shot(
         loop {
             match channel.wait().await {
                 Some(ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
-                Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
-                    stderr.extend_from_slice(&data)
-                }
+                Some(ChannelMsg::ExtendedData { data, ext: 1 }) => stderr.extend_from_slice(&data),
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     exit_code = Some(exit_status);
                 }

@@ -69,28 +69,31 @@ pub fn unregister(id: &str) {
 #[allow(dead_code)]
 pub fn mark_disconnected(id: &str, reason: Option<String>) {
     if let Ok(mut reg) = registry().lock()
-        && let Some(entry) = reg.get_mut(id) {
-            entry.connected = false;
-            entry.last_error = reason;
-        }
+        && let Some(entry) = reg.get_mut(id)
+    {
+        entry.connected = false;
+        entry.last_error = reason;
+    }
 }
 
 /// Set a label on a session (e.g., "Monitor", "Build/Proxmox").
 pub fn set_label(id: &str, label: &str) {
     if let Ok(mut reg) = registry().lock()
-        && let Some(entry) = reg.get_mut(id) {
-            entry.label = label.to_string();
-        }
+        && let Some(entry) = reg.get_mut(id)
+    {
+        entry.label = label.to_string();
+    }
 }
 
 /// Record that a command was executed on a session.
 pub fn record_command(id: &str, cmd: &str) {
     if let Ok(mut reg) = registry().lock()
-        && let Some(entry) = reg.get_mut(id) {
-            entry.command_count += 1;
-            entry.last_command = Some(cmd.chars().take(80).collect());
-            entry.last_command_at = Some(Instant::now());
-        }
+        && let Some(entry) = reg.get_mut(id)
+    {
+        entry.command_count += 1;
+        entry.last_command = Some(cmd.chars().take(80).collect());
+        entry.last_command_at = Some(Instant::now());
+    }
 }
 
 /// Get snapshots of all registered sessions.

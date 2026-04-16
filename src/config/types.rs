@@ -401,8 +401,7 @@ impl Default for VmConfig {
 
 // --- build.toml ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BuildToml {
     pub omicron: OmicronBuildConfig,
     #[serde(default)]
@@ -410,7 +409,6 @@ pub struct BuildToml {
     #[serde(default)]
     pub tuning: TuningConfig,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OmicronBuildConfig {
@@ -541,15 +539,13 @@ pub struct DriftState {
 
 // --- monitoring.toml ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MonitoringToml {
     #[serde(default)]
     pub thresholds: Thresholds,
     #[serde(default)]
     pub polling: PollingConfig,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Thresholds {

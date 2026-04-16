@@ -107,12 +107,13 @@ impl GitRefSelector {
             KeyCode::Enter => {
                 // If a dropdown item is selected, accept it into the input first
                 if let Some(idx) = self.selected_idx
-                    && let Some(item) = self.filtered.get(idx).cloned() {
-                        self.accept_selection(item);
-                        self.selected_idx = None;
-                        self.update_filtered();
-                        return SelectorAction::Continue;
-                    }
+                    && let Some(item) = self.filtered.get(idx).cloned()
+                {
+                    self.accept_selection(item);
+                    self.selected_idx = None;
+                    self.update_filtered();
+                    return SelectorAction::Continue;
+                }
                 // Confirm — only if we can resolve to a SHA
                 match self.resolved_git_ref() {
                     Some(value) => SelectorAction::Confirm(value),
