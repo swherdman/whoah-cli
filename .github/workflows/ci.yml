@@ -16,7 +16,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
@@ -27,7 +27,7 @@ jobs:
     name: Deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   # Full compile — runs after fmt passes; covers cargo check implicitly
@@ -36,7 +36,7 @@ jobs:
     needs: fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
@@ -50,7 +50,7 @@ jobs:
     needs: clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
