@@ -586,4 +586,221 @@ mod tests {
         assert!(output.contains("30%"));
         assert!(output.contains("reachable"));
     }
+
+    // --- gather_status: zones degraded ---
+
+    #[tokio::test]
+    async fn test_gather_status_zones_degraded() {
+        // One nexus zone running, cockroachdb absent. Simnets present.
+        // Key invariant: degraded != rebooted. reboot_detected must be false.
+        let mut mock = MockHost::new("192.168.2.209");
+        mock.add_success(
+            "zpool list -Hp",
+            "rpool\t267544698880\t82530148352\t185014550528\t-\t-\t25\t30\t1.00\tONLINE\t-\n",
+        );
+        mock.add_success(
+            "zoneadm list -cp",
+            "0:global:running:/::\tipkg:shared\n\
+             1:oxz_nexus_abc123:running:/pool/ext/oxp_aaa/crypt/zone/oxz_nexus_abc123:abc:omicron1:excl\n",
+        );
+        mock.add_success(
+            "svcs -H",
+            "online         svc:/system/sled-agent:default\n\
+             online         svc:/system/omicron/baseline:default\n",
+        );
+        mock.add_failure("ls -s /var/tmp", "", 1);
+        mock.add_success("dig", "192.168.2.72\n");
+        mock.add_success("curl", "");
+        mock.add_success("dladm show-simnet", "net0\tnet1\n");
+
+        let config = sample_config();
+        let status = gather_status(&mock, &config).await.unwrap();
+
+        // Degraded but not rebooted — simnets exist and at least one zone is running
+        assert!(!status.reboot_detected);
+        assert_eq!(status.zones.service_counts.get("nexus").copied(), Some(1));
+        assert!(status.zones.service_counts.get("cockroachdb").is_none());
+        assert_eq!(status.zones.service_counts.len(), 1); // no other services snuck in
+        let total: u32 = status.zones.service_counts.values().sum();
+        assert_eq!(total, 1);
+        assert_eq!(
+            status.services.sled_agent,
+            Some(services::ServiceState::Online)
+        );
+        assert!(status.network.nexus_reachable);
+        assert!(status.network.simnets_exist);
+    }
+
+    // --- gather_status: all commands fail (SSH session broken) ---
+
+    #[tokio::test]
+    async fn test_gather_status_ssh_unreachable() {
+        // MockHost with no responses — every execute() returns Err.
+        // gather_status must not panic; all fields should degrade gracefully.
+        let mock = MockHost::new("192.168.2.209");
+        let config = sample_config();
+        let status = gather_status(&mock, &config).await.unwrap();
+
+        assert_eq!(status.zones.service_counts.len(), 0);
+        assert!(status.disk.rpool.is_none());
+        assert!(status.services.sled_agent.is_none());
+        assert!(status.services.baseline.is_none());
+        assert!(!status.network.nexus_reachable);
+        assert!(!status.network.dns_resolving);
+        assert!(!status.network.simnets_exist);
+        // No simnets → reboot_detected = true (same signal as a real reboot)
+        assert!(status.reboot_detected);
+    }
+
+    // --- gather_status: Nexus process down, rack otherwise healthy ---
+
+    #[tokio::test]
+    async fn test_gather_status_nexus_down() {
+        // DNS resolves (returns an IP) but the Nexus HTTP ping fails.
+        // This is a distinct failure mode from post-reboot: the rack is up,
+        // zones are running, but Nexus specifically cannot be reached.
+        let mut mock = MockHost::new("192.168.2.209");
+        mock.add_success(
+            "zpool list -Hp",
+            "rpool\t267544698880\t82530148352\t185014550528\t-\t-\t25\t30\t1.00\tONLINE\t-\n",
+        );
+        mock.add_success(
+            "zoneadm list -cp",
+            "0:global:running:/::\tipkg:shared\n\
+             1:oxz_nexus_abc123:running:/pool/ext/oxp_aaa/crypt/zone/oxz_nexus_abc123:abc:omicron1:excl\n\
+             2:oxz_cockroachdb_def456:running:/pool/ext/oxp_aaa/crypt/zone/oxz_cockroachdb_def456:def:omicron1:excl\n",
+        );
+        mock.add_success(
+            "svcs -H",
+            "online         svc:/system/sled-agent:default\n\
+             online         svc:/system/omicron/baseline:default\n",
+        );
+        mock.add_failure("ls -s /var/tmp", "", 1);
+        mock.add_success("dig", "192.168.2.72\n"); // DNS resolves successfully
+        mock.add_failure("curl", "", 22); // Nexus HTTP ping fails (curl exit 22 = HTTP error)
+        mock.add_success("dladm show-simnet", "net0\tnet1\n");
+
+        let config = sample_config();
+        let status = gather_status(&mock, &config).await.unwrap();
+
+        assert!(!status.network.nexus_reachable);
+        assert!(status.network.dns_resolving);
+        assert!(status.network.simnets_exist);
+        // Not a reboot — simnets present and zones running
+        assert!(!status.reboot_detected);
+        let total: u32 = status.zones.service_counts.values().sum();
+        assert!(total > 0);
+    }
+
+    // --- gather_status: DNS broken, rack otherwise healthy ---
+
+    #[tokio::test]
+    async fn test_gather_status_dns_down() {
+        // DNS returns empty (no resolution) but the rack is otherwise healthy.
+        // This is a partial-failure scenario distinct from the others:
+        //   - nexus_down:     DNS resolves, Nexus HTTP ping fails
+        //   - post_reboot:    simnets absent, zones absent
+        //   - dns_down:       simnets present, zones running, DNS doesn't resolve
+        //                     → Nexus unreachable (can't discover IP), but NOT a reboot
+        //
+        // Also validates that curl is never attempted when DNS returns no address —
+        // no "curl" response is registered; MockHost would error if it were called.
+        let mut mock = MockHost::new("192.168.2.209");
+        mock.add_success(
+            "zpool list -Hp",
+            "rpool\t267544698880\t82530148352\t185014550528\t-\t-\t25\t30\t1.00\tONLINE\t-\n",
+        );
+        mock.add_success(
+            "zoneadm list -cp",
+            "0:global:running:/::\tipkg:shared\n\
+             1:oxz_nexus_abc123:running:/pool/ext/oxp_aaa/crypt/zone/oxz_nexus_abc123:abc:omicron1:excl\n\
+             2:oxz_cockroachdb_def456:running:/pool/ext/oxp_aaa/crypt/zone/oxz_cockroachdb_def456:def:omicron1:excl\n",
+        );
+        mock.add_success(
+            "svcs -H",
+            "online         svc:/system/sled-agent:default\n\
+             online         svc:/system/omicron/baseline:default\n",
+        );
+        mock.add_failure("ls -s /var/tmp", "", 1);
+        mock.add_success("dig", ""); // DNS query returns empty — no address resolved
+        // deliberately no "curl" mock — gather_status must not attempt it when DNS returns nothing
+        mock.add_success("dladm show-simnet", "net0\tnet1\n");
+
+        let config = sample_config();
+        let status = gather_status(&mock, &config).await.unwrap();
+
+        assert!(!status.network.dns_resolving);
+        assert!(!status.network.nexus_reachable);
+        // Not a reboot — simnets present and zones are running
+        assert!(status.network.simnets_exist);
+        assert!(!status.reboot_detected);
+        let total: u32 = status.zones.service_counts.values().sum();
+        assert_eq!(total, 2);
+        assert_eq!(
+            status.services.sled_agent,
+            Some(services::ServiceState::Online)
+        );
+    }
+
+    // --- is_post_reboot_from_parts: direct unit tests ---
+
+    #[test]
+    fn test_post_reboot_no_simnets() {
+        // No simnets → always a reboot, regardless of zones or baseline state
+        assert!(is_post_reboot_from_parts(
+            false,
+            10,
+            &Some(services::ServiceState::Online)
+        ));
+        assert!(is_post_reboot_from_parts(false, 0, &None));
+    }
+
+    #[test]
+    fn test_post_reboot_no_zones() {
+        // Simnets present but no running zones → reboot
+        assert!(is_post_reboot_from_parts(true, 0, &None));
+        assert!(is_post_reboot_from_parts(
+            true,
+            0,
+            &Some(services::ServiceState::Online)
+        ));
+    }
+
+    #[test]
+    fn test_post_reboot_baseline_offline_with_zones_running() {
+        // Subtle edge case: baseline offline alone is NOT sufficient to declare a reboot.
+        // If zones are still running, the system is degraded but not post-reboot.
+        // Only Offline and Maintenance are special-cased in the logic; Degraded, Disabled,
+        // and other states fall through to false unconditionally.
+        assert!(!is_post_reboot_from_parts(
+            true,
+            5,
+            &Some(services::ServiceState::Offline)
+        ));
+        assert!(!is_post_reboot_from_parts(
+            true,
+            5,
+            &Some(services::ServiceState::Maintenance)
+        ));
+        assert!(!is_post_reboot_from_parts(
+            true,
+            5,
+            &Some(services::ServiceState::Degraded)
+        ));
+        assert!(!is_post_reboot_from_parts(
+            true,
+            5,
+            &Some(services::ServiceState::Disabled)
+        ));
+    }
+
+    #[test]
+    fn test_post_reboot_healthy() {
+        // Fully healthy → not a reboot
+        assert!(!is_post_reboot_from_parts(
+            true,
+            10,
+            &Some(services::ServiceState::Online)
+        ));
+    }
 }
