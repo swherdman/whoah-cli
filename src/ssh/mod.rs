@@ -31,5 +31,6 @@ pub trait RemoteHost: Send + Sync {
     fn hostname(&self) -> &str;
 
     /// Check if the connection is alive.
+    #[allow(dead_code)]
     async fn check(&self) -> Result<()>;
 }

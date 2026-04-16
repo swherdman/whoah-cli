@@ -48,13 +48,19 @@ pub enum AppEvent {
     /// Prerequisite checks completed
     PrereqsChecked(crate::ops::prereqs::PrereqResults),
     /// ISO download progress update
-    DownloadProgress { filename: String, percent: f32 },
+    DownloadProgress {
+        #[allow(dead_code)]
+        filename: String,
+        percent: f32,
+    },
     /// Proxmox VM list query completed
     ProxmoxVmList {
         name: String,
         host: String,
         user: String,
+        #[allow(dead_code)]
         port: u16,
+        #[allow(dead_code)]
         node: String,
         hypervisor_ref: String,
         import: bool,
@@ -74,6 +80,7 @@ pub enum AppEvent {
         name: String,
         host: String,
         user: String,
+        #[allow(dead_code)]
         port: u16,
         hypervisor_ref: Option<String>,
         result: Result<crate::ops::discover::DiscoveredConfig, String>,
@@ -109,6 +116,7 @@ pub enum BuildEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Severity {
+    #[allow(dead_code)]
     Info,
     Warning,
     Critical,

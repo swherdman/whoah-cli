@@ -18,6 +18,7 @@ use ratatui::widgets::{Block, Borders, Padding};
 
 /// Complete color palette for the TUI.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub struct Palette {
     // Backgrounds (darkest → lightest)
     pub bg_base: Color,

@@ -330,10 +330,12 @@ impl ConfigView {
         }
     }
 
+    #[allow(dead_code)]
     pub fn activated_name(&self) -> Option<&str> {
         self.activated_name.as_deref()
     }
 
+    #[allow(dead_code)]
     pub fn activated_config(&self) -> Option<&DeploymentConfig> {
         self.activated_config.as_ref()
     }
@@ -1550,8 +1552,6 @@ impl ConfigView {
     }
 
     fn render_prereqs(&self, frame: &mut Frame, area: Rect, p: &Palette) {
-        use crate::ops::prereqs::PrereqStatus;
-
         if area.height < 3 {
             return;
         }

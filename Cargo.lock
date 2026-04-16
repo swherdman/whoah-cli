@@ -3561,6 +3561,7 @@ dependencies = [
  "tracing-subscriber",
  "tui-input",
  "tui-logger",
+ "whoah-cli",
  "whoami",
 ]
 

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use color_eyre::{Result, eyre::eyre};
 use serde::Serialize;
 

@@ -22,6 +22,7 @@ pub struct HostStatus {
 #[derive(Debug, Clone, Serialize)]
 pub enum ConnectionState {
     Connected,
+    #[allow(dead_code)]
     Disconnected { error: String },
 }
 

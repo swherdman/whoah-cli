@@ -26,6 +26,7 @@ pub struct SerialConsole {
 impl SerialConsole {
     /// Open a serial console connection to a VM via SSH to the Proxmox host.
     /// If `log_path` is provided, all console I/O is logged to that file.
+    #[allow(dead_code)]
     pub async fn connect(
         proxmox_host: &str,
         proxmox_user: &str,
@@ -203,6 +204,7 @@ impl SerialConsole {
 
     /// Read the next line from the serial console.
     /// Returns None if the connection is closed.
+    #[allow(dead_code)]
     pub async fn recv(&mut self) -> Option<String> {
         let line = self.lines_rx.recv().await;
         if let Some(ref l) = line {
@@ -295,6 +297,7 @@ impl SerialConsole {
 
     /// Read all available lines until no more arrive for `quiet_duration`.
     /// Useful for draining output after a command.
+    #[allow(dead_code)]
     pub async fn drain(&mut self, quiet_duration: Duration, mut on_line: impl FnMut(&str)) {
         loop {
             tokio::select! {

@@ -689,7 +689,7 @@ impl App {
                 name,
                 host,
                 user,
-                port,
+                port: _,
                 node: _,
                 hypervisor_ref,
                 import,

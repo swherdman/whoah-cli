@@ -10,10 +10,12 @@ use std::time::{Duration, Instant};
 /// A point-in-time snapshot of an SSH session's state.
 #[derive(Debug, Clone)]
 pub struct SessionSnapshot {
+    #[allow(dead_code)]
     pub id: String,
     pub destination: String,
     pub label: String,
     pub connected: bool,
+    #[allow(dead_code)]
     pub connected_at: Instant,
     pub uptime: Duration,
     pub command_count: u64,
@@ -64,6 +66,7 @@ pub fn unregister(id: &str) {
 }
 
 /// Mark a session as disconnected with an optional reason.
+#[allow(dead_code)]
 pub fn mark_disconnected(id: &str, reason: Option<String>) {
     if let Ok(mut reg) = registry().lock() {
         if let Some(entry) = reg.get_mut(id) {

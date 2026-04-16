@@ -1,17 +1,24 @@
+#[cfg(any(test, feature = "test-utils"))]
 use std::collections::HashMap;
 
+#[cfg(any(test, feature = "test-utils"))]
 use async_trait::async_trait;
+#[cfg(any(test, feature = "test-utils"))]
 use color_eyre::{Result, eyre::eyre};
+#[cfg(any(test, feature = "test-utils"))]
 use tokio::sync::mpsc;
 
+#[cfg(any(test, feature = "test-utils"))]
 use super::{CommandOutput, RemoteHost};
 
 /// Mock SSH host for testing. Matches commands by substring.
+#[cfg(any(test, feature = "test-utils"))]
 pub struct MockHost {
     hostname: String,
     responses: HashMap<String, CommandOutput>,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl MockHost {
     pub fn new(hostname: &str) -> Self {
         Self {
@@ -63,6 +70,7 @@ impl MockHost {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[async_trait]
 impl RemoteHost for MockHost {
     async fn execute(&self, cmd: &str) -> Result<CommandOutput> {

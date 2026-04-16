@@ -93,6 +93,7 @@ impl SshHost {
     }
 
     /// Check if the SSH connection is still alive.
+    #[allow(dead_code)]
     pub fn is_connected(&self) -> bool {
         !self.handle.is_closed()
     }
