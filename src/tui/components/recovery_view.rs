@@ -99,11 +99,10 @@ impl RecoveryView {
             RecoveryEvent::ZoneProgress { running, expected } => {
                 self.zone_progress = Some((*running, *expected));
                 let line = format!("Zones: {running}/{expected} running");
-                if let Some(last) = self.output_lines.last() {
-                    if last.starts_with("Zones: ") {
+                if let Some(last) = self.output_lines.last()
+                    && last.starts_with("Zones: ") {
                         self.output_lines.pop();
                     }
-                }
                 self.output_lines.push(line);
             }
             RecoveryEvent::StepCompleted(step, duration) => {

@@ -12,6 +12,12 @@ use russh::keys::ssh_key::PublicKey;
 /// verification, ProxyCommand support, etc.
 pub struct SshClientHandler;
 
+impl Default for SshClientHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SshClientHandler {
     pub fn new() -> Self {
         Self

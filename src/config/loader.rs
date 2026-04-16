@@ -104,11 +104,10 @@ pub fn list_hypervisors() -> Result<Vec<String>> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().map(|e| e == "toml").unwrap_or(false) {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        if path.extension().map(|e| e == "toml").unwrap_or(false)
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                 names.push(stem.to_string());
             }
-        }
     }
     names.sort();
     Ok(names)
@@ -119,15 +118,12 @@ pub fn find_referencing_deployments(hypervisor_name: &str) -> Result<Vec<String>
     let mut refs = Vec::new();
     for name in list_deployments()? {
         let dep_path = deployment_dir(&name)?.join("deployment.toml");
-        if let Ok(contents) = fs::read_to_string(&dep_path) {
-            if let Ok(dep) = toml::from_str::<DeploymentToml>(&contents) {
-                if let Some(href) = &dep.hypervisor {
-                    if href.hypervisor_ref == hypervisor_name {
+        if let Ok(contents) = fs::read_to_string(&dep_path)
+            && let Ok(dep) = toml::from_str::<DeploymentToml>(&contents)
+                && let Some(href) = &dep.hypervisor
+                    && href.hypervisor_ref == hypervisor_name {
                         refs.push(name);
                     }
-                }
-            }
-        }
     }
     refs.sort();
     Ok(refs)
@@ -195,14 +191,13 @@ pub fn list_deployments() -> Result<Vec<String>> {
     let mut names = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            if let Some(name) = entry.file_name().to_str() {
+        if entry.file_type()?.is_dir()
+            && let Some(name) = entry.file_name().to_str() {
                 // Only list dirs that have a deployment.toml
                 if entry.path().join("deployment.toml").exists() {
                     names.push(name.to_string());
                 }
             }
-        }
     }
     names.sort();
     Ok(names)
@@ -225,7 +220,10 @@ pub fn resolve_deployment(explicit: Option<&str>) -> Result<String> {
         0 => Err(eyre!(
             "No deployments found. Run 'whoah init' to create one."
         )),
-        1 => Ok(deployments.into_iter().next().unwrap()),
+        1 => deployments
+            .into_iter()
+            .next()
+            .ok_or_else(|| eyre!("unexpected empty list")),
         _ => {
             let selection = dialoguer::Select::new()
                 .with_prompt("Multiple deployments found. Select one")

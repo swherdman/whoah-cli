@@ -66,3 +66,9 @@ insta = { version = "1", features = ["toml", "yaml"] }
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+large_futures = "warn"
+redundant_clone = "warn"

@@ -1,12 +1,12 @@
-/// Parse cargo build output for progress tracking.
-///
-/// Key output patterns (without `-v` flag):
-/// ```text
-///    Compiling serde v1.0.228
-///    Downloading crates ...
-///    Downloaded serde v1.0.228
-///     Finished `release` profile [optimized] target(s) in 5m 38s
-/// ```
+//! Parse cargo build output for progress tracking.
+//!
+//! Key output patterns (without `-v` flag):
+//! ```text
+//!    Compiling serde v1.0.228
+//!    Downloading crates ...
+//!    Downloaded serde v1.0.228
+//!     Finished `release` profile [optimized] target(s) in 5m 38s
+//! ```
 
 /// Result of parsing a line of cargo output.
 #[derive(Debug, Clone, PartialEq)]

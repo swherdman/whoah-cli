@@ -3,7 +3,7 @@
 //! Orchestrates the build & deploy pipeline by running each step in sequence
 //! and sending progress events back to the TUI.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 
 use color_eyre::{Result, eyre::eyre};
@@ -140,7 +140,7 @@ async fn run_provision(
     pve: &SshHost,
     config: &ProxmoxConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
-    build_log: &PathBuf,
+    build_log: &Path,
 ) -> Result<String> {
     let vmid = config.vm.vmid;
 
@@ -224,15 +224,14 @@ async fn run_provision(
         &config.ssh_user,
         config.ssh_port(),
         vmid,
-        Some(build_log.clone()),
+        Some(build_log.to_path_buf()),
     )
     .await
-    .map_err(|e| {
+    .inspect_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("prov-install".into(), e.to_string()),
         );
-        e
     })?;
 
     send(
@@ -452,7 +451,7 @@ async fn run_provision(
         &config.ssh_user,
         config.ssh_port(),
         vmid,
-        Some(build_log.clone()),
+        Some(build_log.to_path_buf()),
     )
     .await
     .map_err(|e| {
@@ -628,12 +627,11 @@ async fn run_provision(
                 continue;
             }
             // Extract IP (format: "192.168.2.x/24" or just "192.168.2.x")
-            if let Some(ip) = trimmed.split('/').next() {
-                if is_ipv4(ip) {
+            if let Some(ip) = trimmed.split('/').next()
+                && is_ipv4(ip) {
                     ip_address = ip.to_string();
                     break;
                 }
-            }
         }
 
         if !ip_address.is_empty() {
@@ -827,14 +825,13 @@ async fn generate_userdata_script() -> Result<String> {
         if let Ok(mut entries) = tokio::fs::read_dir(&ssh_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("pub") {
-                    if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                if path.extension().and_then(|e| e.to_str()) == Some("pub")
+                    && let Ok(content) = tokio::fs::read_to_string(&path).await {
                         keys.push_str(&content);
                         if !content.ends_with('\n') {
                             keys.push('\n');
                         }
                     }
-                }
             }
         }
         if keys.is_empty() {
@@ -903,7 +900,7 @@ async fn run_os_setup(
     ssh_user: &str,
     config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
-    build_log: &PathBuf,
+    build_log: &Path,
 ) -> Result<()> {
     let helios_config = HostConfig {
         address: helios_ip.to_string(),
@@ -913,7 +910,7 @@ async fn run_os_setup(
         ssh_port: None,
     };
 
-    let log_path = build_log.clone();
+    let log_path = build_log.to_path_buf();
 
     let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/pkg-update");
@@ -994,7 +991,7 @@ async fn continue_os_setup_after_reboot(
     ssh_user: &str,
     config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
-    log_path: &PathBuf,
+    log_path: &Path,
 ) -> Result<()> {
     let helios_config = HostConfig {
         address: helios_ip.to_string(),
@@ -1007,7 +1004,7 @@ async fn continue_os_setup_after_reboot(
     let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/OS-setup");
     let mut ssh =
-        crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.clone(), tx, "os-cleanup").await?;
+        crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.to_path_buf(), tx, "os-cleanup").await?;
 
     // Re-set pkg publisher and HTTPS proxy (new BE has original publisher)
     ssh.detail("Re-setting caches after reboot...").await;
@@ -1094,9 +1091,8 @@ async fn continue_os_setup_after_reboot(
                  bash -s -- -y --default-toolchain {toolchain}' 2>&1"
         ))
         .await
-        .map_err(|e| {
+        .inspect_err(|e| {
             let _ = tx.send(BuildEvent::StepFailed("os-rust".into(), e.to_string()));
-            e
         })?;
 
         let verify = ssh.run("bash -c '. ~/.cargo/env && rustc -V'").await?;
@@ -1144,7 +1140,7 @@ async fn run_omicron_build(
     ssh_user: &str,
     config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
-    build_log: &PathBuf,
+    build_log: &Path,
 ) -> Result<()> {
     let helios_config = HostConfig {
         address: helios_ip.to_string(),
@@ -1154,7 +1150,7 @@ async fn run_omicron_build(
         ssh_port: None,
     };
 
-    let log_path = build_log.clone();
+    let log_path = build_log.to_path_buf();
 
     let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/Omicron");
@@ -1424,12 +1420,11 @@ print('Updated vdevs to {vdev_count}')
          pfexec env PATH=$PATH ./tools/install_builder_prerequisites.sh -y' 2>&1"
     ))
     .await
-    .map_err(|e| {
+    .inspect_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("build-prereqs-builder".into(), e.to_string()),
         );
-        e
     })?;
 
     send(
@@ -1448,12 +1443,11 @@ print('Updated vdevs to {vdev_count}')
          pfexec env PATH=$PATH ./tools/install_runner_prerequisites.sh -y' 2>&1"
     ))
     .await
-    .map_err(|e| {
+    .inspect_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("build-prereqs-runner".into(), e.to_string()),
         );
-        e
     })?;
 
     send(tx, BuildEvent::StepCompleted("build-prereqs-runner".into()));
@@ -1496,14 +1490,13 @@ print('Updated vdevs to {vdev_count}')
                 .await;
             match result {
                 Ok(output) if output.exit_code == 0 => {
-                    if let Ok(total) = output.stdout.trim().parse::<u32>() {
-                        if total > 0 {
+                    if let Ok(total) = output.stdout.trim().parse::<u32>()
+                        && total > 0 {
                             let _ = count_tx.send(BuildEvent::CrateCount {
                                 step_id: "build-compile".into(),
                                 total,
                             });
                         }
-                    }
                 }
                 _ => tracing::debug!("cargo tree query failed (non-fatal)"),
             }
@@ -1516,12 +1509,11 @@ print('Updated vdevs to {vdev_count}')
          cargo build --release --bin omicron-package' 2>&1"
     ))
     .await
-    .map_err(|e| {
+    .inspect_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("build-compile".into(), e.to_string()),
         );
-        e
     })?;
 
     send(tx, BuildEvent::StepCompleted("build-compile".into()));
@@ -1583,12 +1575,11 @@ print('Updated vdevs to {vdev_count}')
          ./target/release/omicron-package package' 2>&1"
     ))
     .await
-    .map_err(|e| {
+    .inspect_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("build-package".into(), e.to_string()),
         );
-        e
     })?;
 
     // Abort the LOG tail task — the packaging command is done
@@ -1736,12 +1727,11 @@ print('Updated vdevs to {vdev_count}')
          --vdev-size {vdev_size}{vdev_dir_flag}' 2>&1"
     ))
     .await
-    .map_err(|e| {
+    .inspect_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("deploy-vhw".into(), e.to_string()),
         );
-        e
     })?;
 
     send(tx, BuildEvent::StepCompleted("deploy-vhw".into()));
@@ -1756,12 +1746,11 @@ print('Updated vdevs to {vdev_count}')
          pfexec ./target/release/omicron-package install' 2>&1"
     ))
     .await
-    .map_err(|e| {
+    .inspect_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("deploy-install".into(), e.to_string()),
         );
-        e
     })?;
 
     send(tx, BuildEvent::StepCompleted("deploy-install".into()));
@@ -2067,12 +2056,11 @@ async fn run_setup_pkg_cache(
         ),
     );
 
-    let cache_info = crate::ops::pkg_cache::ensure_caches().await.map_err(|e| {
+    let cache_info = crate::ops::pkg_cache::ensure_caches().await.inspect_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("cache-start".into(), e.to_string()),
         );
-        e
     })?;
 
     let nginx_status = if cache_info.nginx_was_running {
@@ -2144,12 +2132,11 @@ async fn run_setup_pkg_cache(
     );
     crate::ops::pkg_cache::set_publisher(&helios, &cache_info.publisher_url)
         .await
-        .map_err(|e| {
+        .inspect_err(|e| {
             send(
                 tx,
                 BuildEvent::StepFailed("cache-configure".into(), e.to_string()),
             );
-            e
         })?;
 
     // Install CA cert for HTTPS proxy

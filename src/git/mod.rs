@@ -69,6 +69,12 @@ pub struct RefCache {
     inner: Mutex<HashMap<String, RepoRefs>>,
 }
 
+impl Default for RefCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RefCache {
     pub fn new() -> Self {
         Self {
@@ -77,6 +83,7 @@ impl RefCache {
     }
 
     pub fn get(&self, repo_url: &str) -> Option<RepoRefs> {
+        #[allow(clippy::unwrap_used)] // Mutex poison only occurs after a panic elsewhere
         let map = self.inner.lock().unwrap();
         let entry = map.get(repo_url)?;
         if entry.fetched_at.elapsed().as_secs() < 300 {
@@ -87,6 +94,7 @@ impl RefCache {
     }
 
     pub fn insert(&self, repo_url: String, refs: RepoRefs) {
+        #[allow(clippy::unwrap_used)] // Mutex poison only occurs after a panic elsewhere
         let mut map = self.inner.lock().unwrap();
         map.insert(repo_url, refs);
     }

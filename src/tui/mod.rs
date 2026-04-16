@@ -88,7 +88,7 @@ impl Tui {
         if let Some(task) = self.task.take() {
             // Don't block forever — the task will stop on cancel
             tokio::task::block_in_place(|| {
-                let _ = tokio::runtime::Handle::current().block_on(async {
+                tokio::runtime::Handle::current().block_on(async {
                     let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
                 });
             });

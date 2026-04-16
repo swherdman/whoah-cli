@@ -23,7 +23,9 @@ pub struct HostStatus {
 pub enum ConnectionState {
     Connected,
     #[allow(dead_code)]
-    Disconnected { error: String },
+    Disconnected {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,14 +243,13 @@ fn is_post_reboot_from_parts(
         return true;
     }
     // Baseline offline or in maintenance after reboot
-    if let Some(state) = baseline {
-        if *state == services::ServiceState::Offline
-            || *state == services::ServiceState::Maintenance
+    if let Some(state) = baseline
+        && (*state == services::ServiceState::Offline
+            || *state == services::ServiceState::Maintenance)
         {
             // Only flag if there are also no zones
             return running_zones == 0;
         }
-    }
     false
 }
 

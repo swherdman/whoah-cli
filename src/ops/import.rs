@@ -183,16 +183,14 @@ fn parse_rust_constant(grep_output: &str) -> Option<u32> {
         }
     }
     // Try matching `_u32(NUMBER)` or `_gibibytes_u32(NUMBER)`
-    if let Some(start) = line.rfind('(') {
-        if let Some(end) = line.rfind(')') {
-            if start < end {
+    if let Some(start) = line.rfind('(')
+        && let Some(end) = line.rfind(')')
+            && start < end {
                 let inner = line[start + 1..end].trim();
                 if let Ok(n) = inner.parse::<u32>() {
                     return Some(n);
                 }
             }
-        }
-    }
     None
 }
 

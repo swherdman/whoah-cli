@@ -163,7 +163,7 @@ impl RemoteHost for SshHost {
                 Some(ChannelMsg::Data { data }) => {
                     stdout.extend_from_slice(&data);
                 }
-                Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
                     stderr.extend_from_slice(&data);
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
@@ -240,7 +240,7 @@ impl RemoteHost for SshHost {
                         }
                     }
                 }
-                Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
                     // Stream stderr too (same as current behavior)
                     let chunk = String::from_utf8_lossy(&data);
                     partial_line.push_str(&chunk);

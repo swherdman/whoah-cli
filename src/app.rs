@@ -145,7 +145,7 @@ impl App {
             // Populate Monitor screen with fake status data
             if let Some(tx) = &self.app_event_tx {
                 let status = crate::ops::demo::demo_status(&self.config);
-                let _ = tx.send(Event::App(AppEvent::StatusUpdated(Box::new(status))));
+                let _ = tx.send(Event::App(Box::new(AppEvent::StatusUpdated(Box::new(status)))));
             }
             let address = self
                 .config
@@ -239,16 +239,16 @@ impl App {
         tokio::spawn(async move {
             match SshHost::connect(&host_config).await {
                 Ok(host) => {
-                    let _ = tx.send(Event::App(AppEvent::Connected {
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Connected {
                         address: host_config.address.clone(),
                         host: Arc::new(host),
-                    }));
+                    })));
                 }
                 Err(e) => {
-                    let _ = tx.send(Event::App(AppEvent::Alert {
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Alert {
                         severity: Severity::Critical,
                         message: format!("SSH connection failed: {e}"),
-                    }));
+                    })));
                 }
             }
         });
@@ -767,7 +767,7 @@ impl App {
                             host,
                             user,
                             hypervisor_ref.as_deref(),
-                            &discovered,
+                            discovered,
                         );
                     }
                     Err(msg) => {
@@ -831,8 +831,7 @@ impl App {
             BuildEvent::StepStarted(id) => {
                 let name = self
                     .pipeline
-                    .find_step(id)
-                    .and_then(|(pi, si)| Some(self.pipeline.phases[pi].steps[si].name))
+                    .find_step(id).map(|(pi, si)| self.pipeline.phases[pi].steps[si].name)
                     .unwrap_or("unknown");
                 self.pipeline.start_step(id);
                 tracing::info!("Build: starting {name}");
@@ -885,22 +884,14 @@ impl App {
                         }
                     }
                     "os-update" | "os-packages" => {
-                        if let Some(event) = pkg_progress::parse_pkg_line(detail) {
-                            Some(pkg_progress::format_pkg_event(&event))
-                        } else {
-                            None
-                        }
+                        pkg_progress::parse_pkg_line(detail).map(|event| pkg_progress::format_pkg_event(&event))
                     }
                     "build-prereqs-builder" | "build-prereqs-runner" => {
                         // Parse both pkg and xtask output
                         if let Some(event) = xtask_download::parse_xtask_line(detail) {
                             self.xtask_tracker.update(&event);
                             Some(self.xtask_tracker.summary())
-                        } else if let Some(event) = pkg_progress::parse_pkg_line(detail) {
-                            Some(pkg_progress::format_pkg_event(&event))
-                        } else {
-                            None
-                        }
+                        } else { pkg_progress::parse_pkg_line(detail).map(|event| pkg_progress::format_pkg_event(&event)) }
                     }
                     _ => None,
                 };
@@ -908,20 +899,18 @@ impl App {
                 // Update step detail: use parsed summary if available,
                 // otherwise use the raw detail
                 let display = summary.unwrap_or_else(|| detail.clone());
-                if let Some(step) = self.pipeline.step_mut(id) {
-                    if let crate::ops::pipeline::StepStatus::Running { started, .. } = step.status {
+                if let Some(step) = self.pipeline.step_mut(id)
+                    && let crate::ops::pipeline::StepStatus::Running { started, .. } = step.status {
                         step.status = crate::ops::pipeline::StepStatus::Running {
                             started,
                             detail: Some(display),
                         };
                     }
-                }
             }
             BuildEvent::StepCompleted(id) => {
                 let name = self
                     .pipeline
-                    .find_step(id)
-                    .and_then(|(pi, si)| Some(self.pipeline.phases[pi].steps[si].name))
+                    .find_step(id).map(|(pi, si)| self.pipeline.phases[pi].steps[si].name)
                     .unwrap_or("unknown");
                 self.pipeline.complete_step(id);
 
@@ -1037,14 +1026,14 @@ impl App {
             let host_ref: &dyn RemoteHost = host.as_ref();
             match gather_status(host_ref, &config).await {
                 Ok(status) => {
-                    let _ = tx.send(Event::App(AppEvent::StatusUpdated(Box::new(status))));
+                    let _ = tx.send(Event::App(Box::new(AppEvent::StatusUpdated(Box::new(status)))));
                 }
                 Err(e) => {
                     tracing::error!("Status poll failed: {e}");
-                    let _ = tx.send(Event::App(AppEvent::Alert {
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Alert {
                         severity: Severity::Warning,
                         message: format!("Status poll failed: {e}"),
-                    }));
+                    })));
                 }
             }
         });
@@ -1085,7 +1074,7 @@ impl App {
 
             // Forward recovery events to the app event loop
             while let Some(event) = event_rx.recv().await {
-                let _ = tx.send(Event::App(AppEvent::Recovery(event)));
+                let _ = tx.send(Event::App(Box::new(AppEvent::Recovery(event))));
             }
 
             // Wait for recovery to finish
@@ -1105,7 +1094,7 @@ impl App {
         // Check session cache first
         if let Some(cached) = self.git_ref_cache.get(repo_url) {
             self.config_view.deliver_data(
-                crate::tui::components::config_detail::PanelData::GitRefs(cached.clone()),
+                crate::tui::components::config_detail::PanelData::GitRefs(cached),
             );
             return;
         }
@@ -1113,13 +1102,13 @@ impl App {
         // Spawn async fetch
         let repo_url = repo_url.to_string();
         if let Some(tx) = self.app_event_tx.clone() {
-            let url = repo_url.clone();
+            let url = repo_url;
             std::thread::spawn(move || {
                 let result = crate::git::fetch_repo_refs(&url);
-                let _ = tx.send(Event::App(AppEvent::GitRefsFetched {
+                let _ = tx.send(Event::App(Box::new(AppEvent::GitRefsFetched {
                     repo_url: url,
                     result,
-                }));
+                })));
             });
         }
     }
@@ -1130,7 +1119,7 @@ impl App {
         };
         tokio::spawn(async move {
             let results = crate::ops::prereqs::check_all().await;
-            let _ = tx.send(Event::App(AppEvent::PrereqsChecked(results)));
+            let _ = tx.send(Event::App(Box::new(AppEvent::PrereqsChecked(results))));
         });
     }
 
@@ -1142,12 +1131,12 @@ impl App {
         let user = user.to_string();
         tokio::spawn(async move {
             let status = crate::ssh::probe::probe_ssh(&host, &user, port, 5).await;
-            let _ = tx.send(Event::App(AppEvent::SshProbeResult {
+            let _ = tx.send(Event::App(Box::new(AppEvent::SshProbeResult {
                 host,
                 user,
                 port,
                 status,
-            }));
+            })));
         });
     }
 
@@ -1172,7 +1161,7 @@ impl App {
                 &proxmox_config,
             )
             .await;
-            let _ = tx.send(Event::App(AppEvent::ProxmoxValidated(validation)));
+            let _ = tx.send(Event::App(Box::new(AppEvent::ProxmoxValidated(validation))));
         });
     }
 
@@ -1216,7 +1205,7 @@ impl App {
             )
             .await
             .map_err(|e| e.to_string());
-            let _ = tx.send(Event::App(AppEvent::ProxmoxVmList {
+            let _ = tx.send(Event::App(Box::new(AppEvent::ProxmoxVmList {
                 name,
                 host,
                 user,
@@ -1225,7 +1214,7 @@ impl App {
                 hypervisor_ref,
                 import,
                 result,
-            }));
+            })));
         });
     }
 
@@ -1268,14 +1257,14 @@ impl App {
             )
             .await
             .map_err(|e| e.to_string());
-            let _ = tx.send(Event::App(AppEvent::ProxmoxVmConfig {
+            let _ = tx.send(Event::App(Box::new(AppEvent::ProxmoxVmConfig {
                 name,
                 host,
                 user,
                 port,
                 hypervisor_ref,
                 result,
-            }));
+            })));
         });
     }
 
@@ -1299,14 +1288,14 @@ impl App {
             let result = crate::ops::discover::discover_config(&host, &user, port)
                 .await
                 .map_err(|e| e.to_string());
-            let _ = tx.send(Event::App(AppEvent::HostDiscoveryResult {
+            let _ = tx.send(Event::App(Box::new(AppEvent::HostDiscoveryResult {
                 name,
                 host,
                 user,
                 port,
                 hypervisor_ref,
                 result,
-            }));
+            })));
         });
     }
 
@@ -1336,10 +1325,10 @@ impl App {
             let filename_progress = filename.clone();
             let progress_forwarder = tokio::spawn(async move {
                 while let Some(progress) = progress_rx.recv().await {
-                    let _ = event_tx_progress.send(Event::App(AppEvent::DownloadProgress {
+                    let _ = event_tx_progress.send(Event::App(Box::new(AppEvent::DownloadProgress {
                         filename: filename_progress.clone(),
                         percent: progress.percent,
-                    }));
+                    })));
                 }
             });
 
@@ -1357,7 +1346,7 @@ impl App {
             // Wait for progress forwarder to finish
             let _ = progress_forwarder.await;
 
-            let _ = event_tx.send(Event::App(AppEvent::IsoDownloadResult { filename, result }));
+            let _ = event_tx.send(Event::App(Box::new(AppEvent::IsoDownloadResult { filename, result })));
         });
     }
 
@@ -1385,36 +1374,36 @@ impl App {
 
             // Forward build events to the app event loop
             while let Some(event) = build_rx.recv().await {
-                let _ = tx.send(Event::App(AppEvent::Build(event)));
+                let _ = tx.send(Event::App(Box::new(AppEvent::Build(event))));
             }
 
             // Wait for deploy to finish
             match deploy_handle.await {
                 Ok(Ok(())) => {
                     tracing::info!("Deploy pipeline completed successfully");
-                    let _ = tx.send(Event::App(AppEvent::Build(
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Build(
                         crate::event::BuildEvent::PipelineFinished { success: true },
-                    )));
+                    ))));
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Deploy pipeline failed: {e}");
-                    let _ = tx.send(Event::App(AppEvent::Build(
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Build(
                         crate::event::BuildEvent::PipelineFinished { success: false },
-                    )));
-                    let _ = tx.send(Event::App(AppEvent::Alert {
+                    ))));
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Alert {
                         severity: Severity::Warning,
                         message: format!("Build failed: {e}"),
-                    }));
+                    })));
                 }
                 Err(e) => {
                     tracing::error!("Deploy task panicked: {e}");
-                    let _ = tx.send(Event::App(AppEvent::Build(
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Build(
                         crate::event::BuildEvent::PipelineFinished { success: false },
-                    )));
-                    let _ = tx.send(Event::App(AppEvent::Alert {
+                    ))));
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Alert {
                         severity: Severity::Critical,
                         message: format!("Build task panicked: {e}"),
-                    }));
+                    })));
                 }
             }
         });
@@ -1428,20 +1417,20 @@ impl App {
                 tokio::spawn(async move { crate::ops::demo::run_demo(build_tx).await });
 
             while let Some(event) = build_rx.recv().await {
-                let _ = tx.send(Event::App(AppEvent::Build(event)));
+                let _ = tx.send(Event::App(Box::new(AppEvent::Build(event))));
             }
 
             match demo_handle.await {
                 Ok(()) => {
-                    let _ = tx.send(Event::App(AppEvent::Build(
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Build(
                         crate::event::BuildEvent::PipelineFinished { success: true },
-                    )));
+                    ))));
                 }
                 Err(e) => {
                     tracing::error!("Demo task panicked: {e}");
-                    let _ = tx.send(Event::App(AppEvent::Build(
+                    let _ = tx.send(Event::App(Box::new(AppEvent::Build(
                         crate::event::BuildEvent::PipelineFinished { success: false },
-                    )));
+                    ))));
                 }
             }
         });

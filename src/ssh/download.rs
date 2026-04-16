@@ -71,7 +71,7 @@ pub async fn download_remote(
 
     loop {
         match channel.wait().await {
-            Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+            Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
                 // curl sends progress to stderr
                 let chunk = String::from_utf8_lossy(&data);
                 if let Some(pct) = parse_curl_percent(&chunk) {
@@ -120,7 +120,7 @@ fn parse_curl_percent(chunk: &str) -> Option<f32> {
                 None
             }
         })
-        .last()
+        .next_back()
 }
 
 #[cfg(test)]

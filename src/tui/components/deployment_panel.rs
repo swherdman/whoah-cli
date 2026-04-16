@@ -57,7 +57,7 @@ enum EditMode {
     Fetching,
     /// Git ref selector popup.
     GitRefSelect {
-        selector: GitRefSelector,
+        selector: Box<GitRefSelector>,
     },
 }
 
@@ -161,7 +161,9 @@ impl DeploymentPanel {
     }
 
     fn is_last_tab(&self) -> bool {
-        self.active_tab == *ConfigTab::ALL.last().unwrap()
+        #[allow(clippy::unwrap_used)] // ALL is a non-empty const slice
+        let last = ConfigTab::ALL.last().unwrap();
+        self.active_tab == *last
     }
 
     fn next_tab(&mut self) {
@@ -217,12 +219,8 @@ impl DeploymentPanel {
     fn start_edit(&mut self) -> Option<PanelAction> {
         let sel = self.selected_line();
         let lines = self.detail_lines();
-        let Some(line) = lines.get(sel) else {
-            return None;
-        };
-        if line.field.is_none() {
-            return None;
-        }
+        let line = lines.get(sel)?;
+        line.field.as_ref()?;
 
         if let Some(picker) = &line.picker {
             let action = match picker {
@@ -257,8 +255,8 @@ impl DeploymentPanel {
         self.persist_field(&new_value)?;
 
         // Re-probe if a host credential field was edited (e.g. "hosts.helios01.address")
-        if let Some(path) = field_path {
-            if path.starts_with("hosts.")
+        if let Some(path) = field_path
+            && path.starts_with("hosts.")
                 && (path.ends_with(".address")
                     || path.ends_with(".ssh_user")
                     || path.ends_with(".ssh_port"))
@@ -286,7 +284,6 @@ impl DeploymentPanel {
                     }
                 }
             }
-        }
         Ok(None)
     }
 
@@ -476,8 +473,8 @@ impl DeploymentPanel {
             }
         }
 
-        if let Some(href) = &d.hypervisor {
-            if let Some(vm) = &href.vm {
+        if let Some(href) = &d.hypervisor
+            && let Some(vm) = &href.vm {
                 push_header(&mut host_tab, "VM");
                 push_field(&mut host_tab, "hypervisor", &href.hypervisor_ref);
                 push_editable(
@@ -551,7 +548,6 @@ impl DeploymentPanel {
                     "hypervisor.vm.net_bridge",
                 );
             }
-        }
 
         // ── Network tab ──
         let mut network_tab = Vec::new();
@@ -1137,12 +1133,12 @@ impl ConfigPanel for DeploymentPanel {
                     .get(self.selected_line())
                     .and_then(|l| l.raw_value.as_deref())
                     .and_then(|v| if v == "HEAD" { None } else { Some(v) });
-                let selector = GitRefSelector::new(current, refs);
+                let selector = Box::new(GitRefSelector::new(current, refs));
                 self.edit_mode = EditMode::GitRefSelect { selector };
             }
             PanelData::SshProbeResult(status) => {
                 // Match the probe result IP back to a host name
-                for (name, _host) in &self.config.deployment.hosts {
+                for name in self.config.deployment.hosts.keys() {
                     if self.ssh_status.get(name) == Some(&SshProbeStatus::Checking) {
                         self.ssh_status.insert(name.clone(), status);
                         break;

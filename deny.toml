@@ -1,0 +1,49 @@
+[advisories]
+ignore = [
+    # rand 0.8.5 via russh → num-bigint → rand ^0.8. No fix in 0.8.x line;
+    # patched in rand 0.9.3+ but russh still requires ^0.8 via num-bigint.
+    # GitHub Advisory DB ID — not yet in RustSec DB; ignore is forward-looking.
+    "GHSA-cq8v-f236-94qc",
+
+    # lru 0.12.5 via ratatui 0.29. Fix requires lru >= 0.16.3 → ratatui >= 0.30,
+    # blocked by tui-logger/tui-input/ansi-to-tui not yet supporting ratatui 0.30.
+    # Low severity (Stacked Borrows soundness issue, not exploitable in practice).
+    # GitHub Advisory DB ID — not yet in RustSec DB; ignore is forward-looking.
+    "GHSA-rhfx-m35p-ff5j",
+
+    # fxhash: unmaintained crate via tui-logger 0.14. No security impact, only maintenance risk.
+    # Unblocked when tui-logger upgrades its hasher dependency.
+    "RUSTSEC-2025-0057",
+
+    # paste: unmaintained macro crate via ratatui/ansi-to-tui ecosystem. No security impact.
+    # Unblocked when the ratatui ecosystem moves to a maintained alternative.
+    "RUSTSEC-2024-0436",
+
+    # rsa: Marvin Attack (timing side-channel in RSA private key ops) via
+    # russh 0.60 → internal-russh-forked-ssh-key. This tool uses SSH for
+    # remote command execution only — RSA private key operations occur during
+    # SSH handshake auth, not for user-data encryption. No upstream fix available
+    # in the russh fork. Risk acknowledged; unblocked when russh drops the forked crate.
+    "RUSTSEC-2023-0071",
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"

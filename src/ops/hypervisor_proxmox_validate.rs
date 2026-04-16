@@ -267,7 +267,7 @@ pub async fn validate_proxmox(
                             .iter()
                             .filter_map(|i| {
                                 // volid format: "local:iso/helios-install-vga.iso"
-                                let name = i.volid.split('/').last()?;
+                                let name = i.volid.split('/').next_back()?;
                                 // Only include Helios install ISOs
                                 if name.starts_with("helios-install-") && name.ends_with(".iso") {
                                     Some(name.to_string())

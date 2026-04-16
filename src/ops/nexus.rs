@@ -45,21 +45,19 @@ impl<'a> NexusClient<'a> {
 
         // Parse session token from set-cookie header
         for line in output.stdout.lines() {
-            if let Some(cookie_part) = line.strip_prefix("set-cookie: session=") {
-                if let Some(token) = cookie_part.split(';').next() {
+            if let Some(cookie_part) = line.strip_prefix("set-cookie: session=")
+                && let Some(token) = cookie_part.split(';').next() {
                     self.token = Some(token.to_string());
                     tracing::debug!("Nexus auth successful");
                     return Ok(());
                 }
-            }
             // Also handle lowercase
-            if let Some(cookie_part) = line.strip_prefix("Set-Cookie: session=") {
-                if let Some(token) = cookie_part.split(';').next() {
+            if let Some(cookie_part) = line.strip_prefix("Set-Cookie: session=")
+                && let Some(token) = cookie_part.split(';').next() {
                     self.token = Some(token.to_string());
                     tracing::debug!("Nexus auth successful");
                     return Ok(());
                 }
-            }
         }
 
         Err(eyre!(

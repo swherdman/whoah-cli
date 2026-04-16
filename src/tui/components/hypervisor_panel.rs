@@ -485,8 +485,8 @@ impl HypervisorPanel {
                     .unwrap_or(false),
             };
 
-            if show_download {
-                if let Some(px) = &self.config.proxmox {
+            if show_download
+                && let Some(px) = &self.config.proxmox {
                     // Spacer
                     lines.push(DetailLine {
                         text: String::new(),
@@ -528,7 +528,6 @@ impl HypervisorPanel {
                         suffix: None,
                     });
                 }
-            }
         }
 
         // Delete action

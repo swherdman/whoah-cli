@@ -1,11 +1,11 @@
-/// Parse `pkg install -v` / `pkg update -v` progress output.
-///
-/// Key output patterns:
-/// ```text
-/// Download: 1031/7134 items   83.6/238.8MB  35% complete (16.8M/s)
-/// Actions: 1/7672 actions (Installing new actions)
-/// No updates necessary for this image.
-/// ```
+//! Parse `pkg install -v` / `pkg update -v` progress output.
+//!
+//! Key output patterns:
+//! ```text
+//! Download: 1031/7134 items   83.6/238.8MB  35% complete (16.8M/s)
+//! Actions: 1/7672 actions (Installing new actions)
+//! No updates necessary for this image.
+//! ```
 
 /// Parsed download progress from `pkg install/update -v`.
 #[derive(Debug, Clone, PartialEq)]

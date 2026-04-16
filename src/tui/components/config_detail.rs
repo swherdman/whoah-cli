@@ -302,6 +302,7 @@ pub fn render_input_line<'a>(input: &Input, label: &str, palette: &Palette) -> L
 /// Render a slice of DetailLines with selection highlight, scroll, and optional
 /// inline editing. Returns the visible height of the content area for scroll
 /// calculations.
+#[allow(clippy::too_many_arguments)] // render function requires all parameters; grouping into a struct adds indirection without clarity
 pub fn render_detail_lines(
     frame: &mut Frame,
     area: Rect,
@@ -321,12 +322,11 @@ pub fn render_detail_lines(
             let is_selected = i == selected && is_focused;
             let is_editing = is_selected && edit_input.is_some();
 
-            if is_editing {
-                if let Some(input) = edit_input {
+            if is_editing
+                && let Some(input) = edit_input {
                     let label = dl.text.split(':').next().unwrap_or("    ?");
                     return render_input_line(input, label, p);
                 }
-            }
 
             let mut base_style = match dl.style {
                 DetailStyle::SectionHeader => Style::default()

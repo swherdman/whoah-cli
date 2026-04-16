@@ -1,10 +1,10 @@
-/// Parse JSON log output from `omicron-package package`.
-///
-/// The LOG file at `~/omicron/out/LOG` uses slog-rs JSON format:
-/// ```json
-/// {"msg":"propolis-server: verifying hash","package":"propolis-server"}
-/// {"msg":"propolis-server: downloading prebuilt","package":"propolis-server"}
-/// ```
+//! Parse JSON log output from `omicron-package package`.
+//!
+//! The LOG file at `~/omicron/out/LOG` uses slog-rs JSON format:
+//! ```json
+//! {"msg":"propolis-server: verifying hash","package":"propolis-server"}
+//! {"msg":"propolis-server: downloading prebuilt","package":"propolis-server"}
+//! ```
 
 /// Parsed event from omicron-package LOG.
 #[derive(Debug, Clone, PartialEq)]

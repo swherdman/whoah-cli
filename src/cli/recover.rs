@@ -54,8 +54,8 @@ pub async fn run(deployment: Option<&str>) -> Result<()> {
     // using select to drain events while recovery runs
     let (result, _) = tokio::join!(
         async {
-            let result = run_recovery(host_ref, &params_clone, tx, cancel_clone).await;
-            result
+            
+            run_recovery(host_ref, &params_clone, tx, cancel_clone).await
         },
         async {
             while let Some(event) = rx.recv().await {

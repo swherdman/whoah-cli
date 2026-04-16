@@ -1,13 +1,13 @@
-/// Parse `cargo xtask download` structured log output.
-///
-/// Output format (slog-style):
-/// ```text
-/// Mar 18 06:17:14.090 INFO Starting download, target: Cockroach
-/// Mar 18 06:17:14.093 INFO Downloading out/downloads/cockroach.tgz (attempt 1/3), target: Cockroach
-/// Mar 18 06:24:01.849 INFO Unpacking out/downloads/mgd.tar.gz to out/downloads, target: MaghemiteMgd
-/// Mar 18 06:24:04.483 INFO Download complete, target: MaghemiteMgd
-/// Mar 18 09:35:57.852 INFO Already downloaded (out/downloads/cockroach.tgz), target: Cockroach
-/// ```
+//! Parse `cargo xtask download` structured log output.
+//!
+//! Output format (slog-style):
+//! ```text
+//! Mar 18 06:17:14.090 INFO Starting download, target: Cockroach
+//! Mar 18 06:17:14.093 INFO Downloading out/downloads/cockroach.tgz (attempt 1/3), target: Cockroach
+//! Mar 18 06:24:01.849 INFO Unpacking out/downloads/mgd.tar.gz to out/downloads, target: MaghemiteMgd
+//! Mar 18 06:24:04.483 INFO Download complete, target: MaghemiteMgd
+//! Mar 18 09:35:57.852 INFO Already downloaded (out/downloads/cockroach.tgz), target: Cockroach
+//! ```
 
 /// Parsed event from xtask download.
 #[derive(Debug, Clone, PartialEq)]

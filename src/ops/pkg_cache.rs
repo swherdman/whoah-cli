@@ -289,11 +289,10 @@ async fn build_squid_image() -> Result<()> {
         .output()
         .await;
 
-    if let Ok(out) = check {
-        if out.status.success() {
+    if let Ok(out) = check
+        && out.status.success() {
             return Ok(()); // Already built
         }
-    }
 
     // Write build context to temp dir
     let build_dir = std::env::temp_dir().join("whoah-squid-build");
@@ -319,7 +318,7 @@ async fn build_squid_image() -> Result<()> {
 
     // Build the image
     let output = tokio::process::Command::new("docker")
-        .args(["build", "-t", SQUID_IMAGE, build_dir.to_str().unwrap()])
+        .args(["build", "-t", SQUID_IMAGE, build_dir.to_str().ok_or_else(|| eyre!("build dir path is not valid UTF-8"))?])
         .output()
         .await
         .map_err(|e| eyre!("Docker build failed: {e}"))?;
@@ -401,12 +400,11 @@ async fn detect_lan_ip_wsl() -> Result<String> {
             .output()
             .await;
 
-        if let Ok(out) = check {
-            if out.status.success() || out.status.code() == Some(22) {
+        if let Ok(out) = check
+            && (out.status.success() || out.status.code() == Some(22)) {
                 tracing::info!("WSL LAN IP: {ip} is reachable on port {NGINX_PORT}");
                 return Ok(ip.clone());
             }
-        }
     }
 
     tracing::warn!("No IP responded on port {NGINX_PORT}, falling back to first 192.168.x.x");

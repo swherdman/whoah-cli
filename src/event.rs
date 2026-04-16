@@ -16,10 +16,11 @@ pub enum Event {
     /// Render frame
     Render,
     /// Application-level event
-    App(AppEvent),
+    App(Box<AppEvent>),
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Event bus pattern — boxing individual variants adds noise; events are heap-allocated via channels
 pub enum AppEvent {
     /// Status poll completed
     StatusUpdated(Box<HostStatus>),

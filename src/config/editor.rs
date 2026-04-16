@@ -215,21 +215,19 @@ pub fn migrate_deployment(old_name: &str, new_name: &str) -> Result<()> {
         .parse()
         .map_err(|e| eyre!("Failed to parse deployment.toml: {e}"))?;
 
-    if let Some(deployment) = doc.get_mut("deployment") {
-        if let Some(table) = deployment.as_table_mut() {
+    if let Some(deployment) = doc.get_mut("deployment")
+        && let Some(table) = deployment.as_table_mut() {
             table.insert("name", toml_edit::value(new_name));
         }
-    }
     fs::write(&deployment_path, doc.to_string())?;
 
     // Update global config default if it pointed to old name
-    if let Ok(global) = load_global_config() {
-        if global.default_deployment.as_deref() == Some(old_name) {
+    if let Ok(global) = load_global_config()
+        && global.default_deployment.as_deref() == Some(old_name) {
             write_global_config(&GlobalConfig {
                 default_deployment: Some(new_name.to_string()),
             })?;
         }
-    }
 
     Ok(())
 }
