@@ -938,26 +938,18 @@ async fn run_os_setup(
                  Rebuild the VM from a newer seed image and retry."
             );
             ssh.fail(&msg).await;
-            send(
-                tx,
-                BuildEvent::StepFailed("os-update".into(), msg.clone()),
-            );
+            send(tx, BuildEvent::StepFailed("os-update".into(), msg.clone()));
             return Err(eyre!("{msg}"));
         }
 
         // pkg update exit codes: 0 = updates applied, 4 = already up to date
         ssh.detail("Running pkg update (solver can take 2-5 min on first run)...")
             .await;
-        let pkg_update_exit = ssh
-            .run_streaming("pfexec pkg update -v 2>&1")
-            .await?;
+        let pkg_update_exit = ssh.run_streaming("pfexec pkg update -v 2>&1").await?;
         if pkg_update_exit != 0 && pkg_update_exit != 4 {
             let msg = format!("pkg update failed (exit {pkg_update_exit})");
             ssh.fail(&msg).await;
-            send(
-                tx,
-                BuildEvent::StepFailed("os-update".into(), msg.clone()),
-            );
+            send(tx, BuildEvent::StepFailed("os-update".into(), msg.clone()));
             return Err(eyre!("{msg}"));
         }
 
