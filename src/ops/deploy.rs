@@ -924,15 +924,43 @@ async fn run_os_setup(
         let mut ssh =
             crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.clone(), tx, "os-update").await?;
 
+        // Bootstrap pkg(7) itself before the OS update. On old seed images pkg(7)
+        // is stale and `pkg update` exits 1 immediately demanding this bootstrap
+        // first. Idempotent: exit 4 means already current, exit 0 means updated.
+        ssh.detail("Bootstrapping pkg(7)...").await;
+        let bootstrap_exit = ssh
+            .run_streaming("pfexec pkg install -v pkg:/package/pkg 2>&1")
+            .await?;
+        if bootstrap_exit != 0 && bootstrap_exit != 4 {
+            let msg = format!(
+                "pkg(7) bootstrap failed (exit {bootstrap_exit}) — \
+                 VM image may be too old to update in-place. \
+                 Rebuild the VM from a newer seed image and retry."
+            );
+            ssh.fail(&msg).await;
+            send(
+                tx,
+                BuildEvent::StepFailed("os-update".into(), msg.clone()),
+            );
+            return Err(eyre!("{msg}"));
+        }
+
+        // pkg update exit codes: 0 = updates applied, 4 = already up to date
         ssh.detail("Running pkg update (solver can take 2-5 min on first run)...")
             .await;
-        // pkg update: exit 0 = updated (reboot needed), exit 4 = nothing to do
-        let _exit_code = ssh
-            .run_streaming("pfexec pkg update -v 2>&1; echo \"PKG_EXIT=$?\"")
+        let pkg_update_exit = ssh
+            .run_streaming("pfexec pkg update -v 2>&1")
             .await?;
+        if pkg_update_exit != 0 && pkg_update_exit != 4 {
+            let msg = format!("pkg update failed (exit {pkg_update_exit})");
+            ssh.fail(&msg).await;
+            send(
+                tx,
+                BuildEvent::StepFailed("os-update".into(), msg.clone()),
+            );
+            return Err(eyre!("{msg}"));
+        }
 
-        // Parse the real exit code from our echo (ssh exit code may differ)
-        // For simplicity, check if the output indicated no updates
         let check = ssh.run("beadm list -H | wc -l").await?;
         let be_count: usize = check.stdout.trim().parse().unwrap_or(1);
 
@@ -1417,10 +1445,14 @@ print('Updated vdevs to {vdev_count}')
     ssh.set_step("build-prereqs-builder");
     ssh.detail("Installing builder prerequisites...").await;
 
-    // Use proxy — the script runs cargo xtask download which fetches from buildomat via HTTPS
+    // Use proxy — the script runs cargo xtask download which fetches from buildomat via HTTPS.
+    // /opt/ooce/bin:/opt/ooce/sbin are added explicitly: on a fresh VM the ooce profile.d entry
+    // doesn't exist yet (it's created when ooce packages are first installed), so pg_config
+    // wouldn't be found otherwise. Established VMs got these paths via profile.d automatically.
     ssh.run_streaming_check_with_proxy(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
-         pfexec env PATH=$PATH ./tools/install_builder_prerequisites.sh -y' 2>&1"
+         pfexec env PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin \
+         ./tools/install_builder_prerequisites.sh -y' 2>&1"
     ))
     .await
     .inspect_err(|e| {
@@ -1443,7 +1475,8 @@ print('Updated vdevs to {vdev_count}')
     // Use proxy — the script may download prebuilt artifacts via HTTPS
     ssh.run_streaming_check_with_proxy(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
-         pfexec env PATH=$PATH ./tools/install_runner_prerequisites.sh -y' 2>&1"
+         pfexec env PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin \
+         ./tools/install_runner_prerequisites.sh -y' 2>&1"
     ))
     .await
     .inspect_err(|e| {
@@ -1507,9 +1540,11 @@ print('Updated vdevs to {vdev_count}')
         });
     }
 
-    // Use proxy — cargo downloads crates from crates.io/github via HTTPS
+    // Use proxy — cargo downloads crates from crates.io/github via HTTPS.
+    // ooce paths needed: pq-sys build script calls pg_config to set DEP_PQ_LIBDIRS.
     ssh.run_streaming_check_with_proxy(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         export PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin && \
          cargo build --release --bin omicron-package' 2>&1"
     ))
     .await
@@ -1529,6 +1564,7 @@ print('Updated vdevs to {vdev_count}')
 
     ssh.run_check(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         export PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin && \
          ./target/release/omicron-package -t default target create -p dev' 2>&1"
     ))
     .await?;
@@ -1576,6 +1612,7 @@ print('Updated vdevs to {vdev_count}')
     // reqwest respects https_proxy + SSL_CERT_FILE env vars
     ssh.run_streaming_check_with_proxy(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         export PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin && \
          ./target/release/omicron-package package' 2>&1"
     ))
     .await
