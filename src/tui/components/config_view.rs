@@ -220,8 +220,10 @@ impl ConfigView {
             prereqs: crate::ops::prereqs::PrereqResults::default(),
         };
 
+        view.deployment_list_state.select(Some(initial_idx));
+        view.hypervisor_list_state.select(Some(0));
+
         if !view.deployments.is_empty() {
-            view.deployment_list_state.select(Some(initial_idx));
             view.load_selected_deployment();
             // Cache the initial activation config
             if let ActivePanel::Deployment(ref panel) = view.active_panel {
