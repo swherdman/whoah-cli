@@ -1406,8 +1406,9 @@ impl App {
             return;
         }
 
-        let config = self.config.clone();
         let deploy_name = self.deployment_name.clone();
+        let config = crate::config::load_deployment(&deploy_name)
+            .unwrap_or_else(|_| self.config.clone());
 
         // Create an unbounded channel for build events
         let (build_tx, mut build_rx) = mpsc::unbounded_channel::<crate::event::BuildEvent>();
