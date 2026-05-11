@@ -87,6 +87,38 @@ pub struct App {
 }
 
 impl App {
+    pub fn new_empty(demo: bool) -> Self {
+        use crate::config::types::Thresholds;
+        Self {
+            config: DeploymentConfig::default(),
+            deployment_name: String::new(),
+            should_quit: false,
+            screen: Screen::Config,
+            monitor_mode: MonitorMode::Dashboard,
+            focused: FocusedPanel::Status,
+            status_panel: StatusPanel::new(),
+            disk_panel: DiskPanel::new(Thresholds::default(), 42949672960),
+            log_panel: LogPanel::new(),
+            alert_bar: AlertBar::new(),
+            status_bar: StatusBarComponent::new(""),
+            recovery_view: RecoveryView::new(),
+            build_view: BuildView::new(),
+            config_view: ConfigView::new(""),
+            debug_view: DebugView::new(),
+            pipeline: pipeline::build_deploy_pipeline(),
+            host: None,
+            last_poll: None,
+            needs_reconnect: false,
+            last_status_log: None,
+            app_event_tx: None,
+            cargo_tracker: CargoTracker::default(),
+            xtask_tracker: XtaskTracker::default(),
+            omicron_pkg_tracker: OmicronPkgTracker::default(),
+            git_ref_cache: RefCache::new(),
+            demo,
+        }
+    }
+
     pub fn new(config: DeploymentConfig, deployment_name: String, demo: bool) -> Self {
         let thresholds = config.monitoring.thresholds.clone();
         let vdev_size = config
@@ -135,13 +167,13 @@ impl App {
         // Check prerequisites (docker, gh) in background
         self.spawn_prereq_checks();
 
-        if !self.demo {
+        if !self.demo && !self.deployment_name.is_empty() {
             // Connect to host
             self.connect().await;
 
             // Initial status poll
             self.spawn_status_poll();
-        } else {
+        } else if self.demo {
             // Populate Monitor screen with fake status data
             if let Some(tx) = &self.app_event_tx {
                 let status = crate::ops::demo::demo_status(&self.config);
@@ -983,6 +1015,7 @@ impl App {
                 self.needs_reconnect = true;
             }
             BuildEvent::PipelineFinished { success } => {
+                self.pipeline.finish();
                 if *success && !self.demo {
                     tracing::info!("Build pipeline finished — connecting to new host");
                     // Drop stale connection and connect to the (possibly new) IP

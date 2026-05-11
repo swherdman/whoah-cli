@@ -19,9 +19,19 @@ pub struct DeploymentConfig {
     pub monitoring: MonitoringToml,
 }
 
+impl Default for DeploymentConfig {
+    fn default() -> Self {
+        Self {
+            deployment: DeploymentToml::default(),
+            build: BuildToml::default(),
+            monitoring: MonitoringToml::default(),
+        }
+    }
+}
+
 // --- deployment.toml ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeploymentToml {
     pub deployment: DeploymentMeta,
     pub hosts: BTreeMap<String, HostConfig>,
@@ -32,7 +42,7 @@ pub struct DeploymentToml {
     pub hypervisor: Option<HypervisorRef>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeploymentMeta {
     pub name: String,
     #[serde(default)]
@@ -77,7 +87,7 @@ pub enum HostType {
     BareMetal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetworkConfig {
     pub gateway: String,
     pub external_dns_ips: Vec<String>,
@@ -98,7 +108,7 @@ pub struct NetworkConfig {
     pub allowed_source_ips: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IpRange {
     pub first: String,
     pub last: String,

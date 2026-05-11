@@ -45,9 +45,14 @@ async fn main() -> Result<()> {
         }
         None => {
             // Launch TUI dashboard
-            let deployment_name = config::resolve_deployment(deployment)?;
-            let cfg = config::load_deployment(&deployment_name)?;
-            let mut application = app::App::new(cfg, deployment_name, cli.demo);
+            let deployments = config::list_deployments()?;
+            let mut application = if deployments.is_empty() {
+                app::App::new_empty(cli.demo)
+            } else {
+                let deployment_name = config::resolve_deployment(deployment)?;
+                let cfg = config::load_deployment(&deployment_name)?;
+                app::App::new(cfg, deployment_name, cli.demo)
+            };
             application.run().await?;
         }
     }
