@@ -124,14 +124,30 @@ pub async fn run_deploy(
         },
     );
 
+    // Resolve which IPS publisher this omicron commit uses before starting the cache.
+    // This must happen before cache-start so ensure_caches can compute the right URL.
+    let publisher = crate::ops::pkg_cache::resolve_omicron_publisher(
+        config.build.omicron.git_ref.as_deref(),
+    )
+    .await
+    .inspect_err(|e| {
+        send(
+            &tx,
+            BuildEvent::StepFailed(
+                "cache-start".into(),
+                format!("Failed to detect omicron publisher: {e}"),
+            ),
+        );
+    })?;
+
     // Phase 4: Cache Setup
-    run_setup_pkg_cache(&helios_ip, &ssh_user, &tx).await?;
+    run_setup_pkg_cache(&helios_ip, &ssh_user, publisher.clone(), &tx).await?;
 
     // Phase 5: OS Setup
-    run_os_setup(&helios_ip, &ssh_user, &config, &tx, &build_log).await?;
+    run_os_setup(&helios_ip, &ssh_user, publisher.clone(), &config, &tx, &build_log).await?;
 
     // Phase 6-8: Build, Deploy, Configure
-    run_omicron_build(&helios_ip, &ssh_user, &config, &tx, &build_log).await?;
+    run_omicron_build(&helios_ip, &ssh_user, publisher, &config, &tx, &build_log).await?;
 
     Ok(())
 }
@@ -900,6 +916,7 @@ fn get_local_gecos() -> Result<String> {
 async fn run_os_setup(
     helios_ip: &str,
     ssh_user: &str,
+    publisher: crate::ops::pkg_cache::OmicronPublisher,
     config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
     build_log: &Path,
@@ -998,19 +1015,27 @@ async fn run_os_setup(
 
             send(tx, BuildEvent::StepCompleted("os-reboot".into()));
 
-            return continue_os_setup_after_reboot(helios_ip, ssh_user, config, tx, &log_path)
-                .await;
+            return continue_os_setup_after_reboot(
+                helios_ip,
+                ssh_user,
+                publisher,
+                config,
+                tx,
+                &log_path,
+            )
+            .await;
         }
     }
 
     // If no reboot needed, continue inline
     let _ = helios.close().await;
-    continue_os_setup_after_reboot(helios_ip, ssh_user, config, tx, &log_path).await
+    continue_os_setup_after_reboot(helios_ip, ssh_user, publisher, config, tx, &log_path).await
 }
 
 async fn continue_os_setup_after_reboot(
     helios_ip: &str,
     ssh_user: &str,
+    publisher: crate::ops::pkg_cache::OmicronPublisher,
     config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
     log_path: &Path,
@@ -1031,13 +1056,13 @@ async fn continue_os_setup_after_reboot(
 
     // Re-set pkg publisher and HTTPS proxy (new BE has original publisher)
     ssh.detail("Re-setting caches after reboot...").await;
-    let cache_info = crate::ops::pkg_cache::ensure_caches().await?;
-    let _ = ssh
-        .run(&format!(
-            "pfexec pkg set-publisher -O {} helios-dev",
-            cache_info.publisher_url
-        ))
-        .await;
+    let cache_info = crate::ops::pkg_cache::ensure_caches(publisher.clone()).await?;
+    let _ = crate::ops::pkg_cache::set_publisher(
+        &helios,
+        &cache_info.publisher_url,
+        cache_info.publisher.name,
+    )
+    .await;
 
     // Install CA cert and set proxy for HTTPS downloads
     let ca_path = crate::ops::pkg_cache::install_ca_cert(&helios, &cache_info.lan_ip)
@@ -1161,6 +1186,7 @@ async fn continue_os_setup_after_reboot(
 async fn run_omicron_build(
     helios_ip: &str,
     ssh_user: &str,
+    publisher: crate::ops::pkg_cache::OmicronPublisher,
     config: &DeploymentConfig,
     tx: &mpsc::UnboundedSender<BuildEvent>,
     build_log: &Path,
@@ -1181,7 +1207,7 @@ async fn run_omicron_build(
         crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.clone(), tx, "repo-clone").await?;
 
     // Re-set proxy for HTTPS downloads
-    let cache_info = crate::ops::pkg_cache::ensure_caches().await?;
+    let cache_info = crate::ops::pkg_cache::ensure_caches(publisher).await?;
     let ca_path = crate::ops::pkg_cache::install_ca_cert(&helios, &cache_info.lan_ip)
         .await
         .unwrap_or_else(|_| "/etc/certs/CA/whoah-cache-ca.pem".to_string());
@@ -2082,6 +2108,7 @@ async fn wait_for_ssh(ip: &str, user: &str, timeout: Duration) -> Result<()> {
 async fn run_setup_pkg_cache(
     helios_ip: &str,
     ssh_user: &str,
+    publisher: crate::ops::pkg_cache::OmicronPublisher,
     tx: &mpsc::UnboundedSender<BuildEvent>,
 ) -> Result<()> {
     // Step: cache-start — Start Docker caching proxies on workstation
@@ -2094,7 +2121,7 @@ async fn run_setup_pkg_cache(
         ),
     );
 
-    let cache_info = crate::ops::pkg_cache::ensure_caches()
+    let cache_info = crate::ops::pkg_cache::ensure_caches(publisher)
         .await
         .inspect_err(|e| {
             send(
@@ -2170,14 +2197,18 @@ async fn run_setup_pkg_cache(
         tx,
         BuildEvent::StepDetail("cache-configure".into(), "Setting pkg publisher...".into()),
     );
-    crate::ops::pkg_cache::set_publisher(&helios, &cache_info.publisher_url)
-        .await
-        .inspect_err(|e| {
-            send(
-                tx,
-                BuildEvent::StepFailed("cache-configure".into(), e.to_string()),
-            );
-        })?;
+    crate::ops::pkg_cache::set_publisher(
+        &helios,
+        &cache_info.publisher_url,
+        cache_info.publisher.name,
+    )
+    .await
+    .inspect_err(|e| {
+        send(
+            tx,
+            BuildEvent::StepFailed("cache-configure".into(), e.to_string()),
+        );
+    })?;
 
     // Install CA cert for HTTPS proxy
     send(
@@ -2229,8 +2260,12 @@ async fn run_setup_pkg_cache(
             "Verifying HTTPS proxy from Helios...".into(),
         ),
     );
-    let proxy_ok =
-        crate::ops::pkg_cache::verify_https_proxy(&helios, &cache_info.https_proxy_url).await?;
+    let proxy_ok = crate::ops::pkg_cache::verify_https_proxy(
+        &helios,
+        &cache_info.https_proxy_url,
+        cache_info.publisher.catalog_path,
+    )
+    .await?;
     if !proxy_ok {
         send(
             tx,

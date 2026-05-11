@@ -19,10 +19,93 @@ const SQUID_CONTAINER: &str = "whoah-https-cache";
 const SQUID_PORT: u16 = 3128;
 const SQUID_IMAGE: &str = "whoah-squid-ssl";
 
+/// Must match the `# whoah-cache-config vN` sentinel in assets/pkg-cache-nginx.conf.
+/// Increment this (and update the asset) whenever the config changes incompatibly so
+/// an existing running container is replaced on next `ensure_caches` call.
+const NGINX_CONFIG_SENTINEL: &str = "# whoah-cache-config v2";
+
+/// IPS publisher identity, derived from the omicron commit being built.
+/// Controls which catalog path and publisher name to configure on the Helios host.
+#[derive(Clone)]
+pub struct OmicronPublisher {
+    /// IPS publisher name (e.g. "helios-dev" or "helios").
+    pub name: &'static str,
+    /// Catalog subpath on pkg.oxide.computer (e.g. "helios/2/dev/" or "helios/3/dev/").
+    pub catalog_path: &'static str,
+}
+
+const KNOWN_PUBLISHERS: &[(&str, OmicronPublisher)] = &[
+    (
+        "helios-dev",
+        OmicronPublisher { name: "helios-dev", catalog_path: "helios/2/dev/" },
+    ),
+    (
+        "helios",
+        OmicronPublisher { name: "helios", catalog_path: "helios/3/dev/" },
+    ),
+];
+
+/// Detect which IPS publisher a given omicron commit uses by reading
+/// `tools/install_opte.sh` from raw.githubusercontent.com and parsing the
+/// `pkg://<publisher>/driver/network/opte` install line.
+///
+/// If `git_ref` is `None`, uses the `main` branch.
+pub async fn resolve_omicron_publisher(git_ref: Option<&str>) -> Result<OmicronPublisher> {
+    let git_ref = git_ref.unwrap_or("main");
+    let url = format!(
+        "https://raw.githubusercontent.com/oxidecomputer/omicron/{git_ref}/tools/install_opte.sh"
+    );
+
+    let output = tokio::process::Command::new("curl")
+        .args(["-sf", "--connect-timeout", "10", "--max-time", "20", &url])
+        .output()
+        .await
+        .map_err(|e| eyre!("Failed to fetch install_opte.sh: {e}"))?;
+
+    if !output.status.success() {
+        return Err(eyre!(
+            "Could not fetch tools/install_opte.sh at omicron ref '{git_ref}' (HTTP {}). \
+             Check that git_ref is a valid commit/branch.",
+            output.status
+        ));
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+
+    // Parse: `pkg install ... pkg://<publisher>/driver/network/opte@...`
+    let publisher_name: String = body
+        .lines()
+        .find_map(|line| {
+            let pos = line.find("pkg://")?;
+            let rest = &line[pos + 6..];
+            let end = rest.find("/driver/network/opte")?;
+            Some(rest[..end].to_string())
+        })
+        .ok_or_else(|| {
+            eyre!(
+                "No 'pkg://<publisher>/driver/network/opte' line found in install_opte.sh \
+                 at omicron ref '{git_ref}'"
+            )
+        })?;
+
+    KNOWN_PUBLISHERS
+        .iter()
+        .find(|(key, _)| *key == publisher_name.as_str())
+        .map(|(_, p)| p.clone())
+        .ok_or_else(|| {
+            eyre!(
+                "Unknown OPTE publisher '{publisher_name}' at omicron ref '{git_ref}'. \
+                 Add it to KNOWN_PUBLISHERS in pkg_cache.rs."
+            )
+        })
+}
+
 /// Result of ensuring all cache containers are running.
 pub struct CacheInfo {
     /// The URL to use as the IPS publisher origin on Helios hosts.
     pub publisher_url: String,
+    /// The publisher name and catalog path for this build.
+    pub publisher: OmicronPublisher,
     /// The HTTPS proxy URL for general downloads.
     pub https_proxy_url: String,
     /// The LAN IP the caches are reachable on.
@@ -34,8 +117,8 @@ pub struct CacheInfo {
 }
 
 /// Ensure both cache containers are running and reachable.
-pub async fn ensure_caches() -> Result<CacheInfo> {
-    let nginx_was_running = ensure_container_running(NGINX_CONTAINER).await;
+pub async fn ensure_caches(publisher: OmicronPublisher) -> Result<CacheInfo> {
+    let nginx_was_running = nginx_config_current().await;
     if !nginx_was_running {
         start_nginx().await?;
     }
@@ -48,11 +131,12 @@ pub async fn ensure_caches() -> Result<CacheInfo> {
     // Detect LAN IP after containers are running so we can test port reachability
     let lan_ip = detect_lan_ip().await?;
 
-    let publisher_url = format!("http://{}:{}/helios/2/dev/", lan_ip, NGINX_PORT);
+    let publisher_url = format!("http://{}:{}/{}", lan_ip, NGINX_PORT, publisher.catalog_path);
     let https_proxy_url = format!("http://{}:{}", lan_ip, SQUID_PORT);
 
     Ok(CacheInfo {
         publisher_url,
+        publisher,
         https_proxy_url,
         lan_ip,
         nginx_was_running,
@@ -76,18 +160,23 @@ pub async fn verify_pkg_cache(
 pub async fn verify_https_proxy(
     host: &dyn crate::ssh::RemoteHost,
     proxy_url: &str,
+    catalog_path: &str,
 ) -> Result<bool> {
     let cmd = format!(
         "curl -sf --connect-timeout 5 --max-time 10 --proxy {proxy_url} \
-         -k https://pkg.oxide.computer/helios/2/dev/versions/0/ >/dev/null 2>&1"
+         -k https://pkg.oxide.computer/{catalog_path}versions/0/ >/dev/null 2>&1"
     );
     let output = host.execute(&cmd).await?;
     Ok(output.exit_code == 0)
 }
 
 /// Set the pkg publisher on a Helios host to use the cache.
-pub async fn set_publisher(host: &dyn crate::ssh::RemoteHost, publisher_url: &str) -> Result<()> {
-    let cmd = format!("pfexec pkg set-publisher -O {publisher_url} helios-dev");
+pub async fn set_publisher(
+    host: &dyn crate::ssh::RemoteHost,
+    publisher_url: &str,
+    publisher_name: &str,
+) -> Result<()> {
+    let cmd = format!("pfexec pkg set-publisher -O {publisher_url} {publisher_name}");
     let output = host.execute(&cmd).await?;
     if output.exit_code != 0 {
         return Err(eyre!("Failed to set publisher: {}", output.stderr.trim()));
@@ -189,6 +278,33 @@ async fn ensure_container_running(name: &str) -> bool {
 
     match status {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim() == "true",
+        _ => false,
+    }
+}
+
+/// Returns true if the nginx container is running AND its config matches the
+/// current NGINX_CONFIG_SENTINEL. Returns false (triggering a restart) if the
+/// container is stopped or was built from an older config version.
+async fn nginx_config_current() -> bool {
+    if !ensure_container_running(NGINX_CONTAINER).await {
+        return false;
+    }
+
+    let check = tokio::process::Command::new("docker")
+        .args([
+            "exec",
+            NGINX_CONTAINER,
+            "head",
+            "-1",
+            "/etc/nginx/conf.d/default.conf",
+        ])
+        .output()
+        .await;
+
+    match check {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).trim() == NGINX_CONFIG_SENTINEL
+        }
         _ => false,
     }
 }
