@@ -1265,8 +1265,13 @@ async fn run_omicron_build(
         r#"sed -i 's/^infra_ip_last = .*/infra_ip_last = "{infra_ip}"/' {rss_path}"#
     ))
     .await?;
+    // Two patterns: pre-#10082 omicron used a bare string, post-#10082 uses
+    // an inline table with ip_net. One will match, the other is a no-op.
     ssh.run_check(&format!(
         r#"sed -i 's|address = "192\.168\.[0-9]*\.[0-9]*/24"|address = "{infra_ip}/24"|' {rss_path}"#
+    )).await?;
+    ssh.run_check(&format!(
+        r#"sed -i 's|ip_net = "192\.168\.[0-9]*\.[0-9]*/24"|ip_net = "{infra_ip}/24"|' {rss_path}"#
     )).await?;
     ssh.run_check(&format!(
         r#"sed -i 's/nexthop = "192\.168\.[0-9]*\.[0-9]*"/nexthop = "{gateway}"/' {rss_path}"#
