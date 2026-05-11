@@ -124,11 +124,19 @@ impl Phase {
 pub struct Pipeline {
     pub phases: Vec<Phase>,
     pub started: Option<Instant>,
+    pub finished: Option<Duration>,
 }
 
 impl Pipeline {
     pub fn total_elapsed(&self) -> Duration {
+        if let Some(d) = self.finished {
+            return d;
+        }
         self.started.map(|s| s.elapsed()).unwrap_or(Duration::ZERO)
+    }
+
+    pub fn finish(&mut self) {
+        self.finished = Some(self.total_elapsed());
     }
 
     /// Find a step by id across all phases. Returns (phase_index, step_index).
@@ -217,6 +225,7 @@ impl Pipeline {
 pub fn build_deploy_pipeline() -> Pipeline {
     Pipeline {
         started: None,
+        finished: None,
         phases: vec![
             Phase::new(
                 "Provision VM",
