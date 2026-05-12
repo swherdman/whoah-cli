@@ -1011,8 +1011,17 @@ impl App {
                     }
                 }
 
-                // Mark for reconnect so Monitor uses the new IP
-                self.needs_reconnect = true;
+                // run_configure_access completes before HostDiscovered fires, so SSH
+                // is already live on the new VM. Reconnect immediately so the Monitor
+                // tab shows live data during the build rather than waiting until
+                // PipelineFinished.
+                if let Some(host) = self.host.take() {
+                    tokio::spawn(async move {
+                        let _ = host.close().await;
+                    });
+                }
+                self.status_bar.connected = false;
+                self.spawn_connect();
             }
             BuildEvent::PipelineFinished { success } => {
                 self.pipeline.finish();
