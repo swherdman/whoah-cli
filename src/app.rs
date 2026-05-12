@@ -1027,15 +1027,12 @@ impl App {
                 self.pipeline.finish();
                 if *success && !self.demo {
                     tracing::info!("Build pipeline finished — connecting to new host");
-                    // Drop stale connection and connect to the (possibly new) IP
-                    if let Some(host) = self.host.take() {
-                        tokio::spawn(async move {
-                            let _ = host.close().await;
-                        });
-                    }
-                    self.status_bar.connected = false;
                     self.needs_reconnect = false;
-                    self.spawn_connect();
+                    // HostDiscovered already reconnected mid-build; only reconnect
+                    // here if that connection attempt failed.
+                    if self.host.is_none() {
+                        self.spawn_connect();
+                    }
                 }
             }
         }
