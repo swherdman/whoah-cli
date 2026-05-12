@@ -1428,11 +1428,16 @@ print('Updated vdevs to {vdev_count}')
             r#"sed -i 's/^control_plane_memory_earmark_mb = .*/control_plane_memory_earmark_mb = {earmark}/' {sled_config_path}"#
         )).await?;
     }
-    if let Some(reservoir) = tuning.vmm_reservoir_percentage {
-        ssh.run_check(&format!(
-            r#"sed -i 's/^vmm_reservoir_percentage = .*/vmm_reservoir_percentage = {reservoir}/' {sled_config_path}"#
-        )).await?;
-    }
+    // Always switch from percentage-based to fixed-size reservoir. The default
+    // 60% (~24 GiB on a 48 GiB VM) cannot be allocated once omicron services
+    // have started and fragmented physical memory.
+    let reservoir_mb = tuning.vmm_reservoir_size_mb.unwrap_or(4096);
+    ssh.run_check(&format!(
+        r#"sed -i 's/^vmm_reservoir_percentage = .*$/# vmm_reservoir_percentage = 60/' {sled_config_path}"#
+    )).await?;
+    ssh.run_check(&format!(
+        r#"sed -i 's/^#vmm_reservoir_size_mb = .*$/vmm_reservoir_size_mb = {reservoir_mb}/' {sled_config_path}"#
+    )).await?;
     if let Some(swap_dev) = tuning.swap_device_size_gb {
         ssh.run_check(&format!(
             r#"sed -i 's/^swap_device_size_gb = .*/swap_device_size_gb = {swap_dev}/' {sled_config_path}"#

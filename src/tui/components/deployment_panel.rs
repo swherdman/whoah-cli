@@ -971,12 +971,12 @@ impl DeploymentPanel {
         );
         push_editable(
             &mut build_tab,
-            "vmm_reservoir_%",
-            &t.vmm_reservoir_percentage
+            "vmm_reservoir_mb",
+            &t.vmm_reservoir_size_mb
                 .map(|v| v.to_string())
-                .unwrap_or_else(|| "60".into()),
+                .unwrap_or_else(|| "4096".into()),
             "build",
-            "tuning.vmm_reservoir_percentage",
+            "tuning.vmm_reservoir_size_mb",
         );
         push_editable(
             &mut build_tab,

@@ -526,9 +526,11 @@ pub struct TuningConfig {
     /// Control plane memory earmark in MB (sled-agent config, default: 6144)
     #[serde(default)]
     pub memory_earmark_mb: Option<u32>,
-    /// VMM reservoir percentage of unbudgeted DRAM (sled-agent config, default: 60)
+    /// VMM reservoir fixed size in MiB (sled-agent config, default: 4096).
+    /// The percentage-based default of 60% is too large for dev VMs and will
+    /// always fail to allocate. A fixed size is always used instead.
     #[serde(default)]
-    pub vmm_reservoir_percentage: Option<u32>,
+    pub vmm_reservoir_size_mb: Option<u32>,
     /// Swap device size in GB for sled-agent config (default: 64)
     #[serde(default)]
     pub swap_device_size_gb: Option<u32>,
