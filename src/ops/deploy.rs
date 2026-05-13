@@ -1830,8 +1830,11 @@ print('Updated vdevs to {vdev_count}')
     if config.build.tuning.pre_format_vdevs.unwrap_or(true) {
         send(tx, BuildEvent::StepStarted("deploy-preformat".into()));
         ssh.set_step("deploy-preformat");
-        ssh.detail("Pre-formatting synthetic vdevs sequentially...")
-            .await;
+        ssh.detail(
+            "Pre-formatting M.2 synthetic vdevs sequentially \
+             (U.2 UUIDs are assigned by RSS at install time and cannot be pre-provisioned)",
+        )
+        .await;
 
         let vdev_dir = config
             .build
@@ -1894,11 +1897,20 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
                 format!("{vdev_dir}/{filename}")
             };
 
-            // Determine zpool name prefix by vdev type
+            // U.2 pool UUIDs are assigned by RSS (rack-setup/src/plan/service.rs) with
+            // ZpoolUuid::new_v4() at install time — unknowable in advance without upstream
+            // changes. Skip them; they are created concurrently by sled-agent as before.
+            if filename.starts_with("u2_") {
+                ssh.detail(&format!(
+                    "[{n}/{total}] {filename}: skipping U.2 vdev (UUID assigned by RSS)"
+                ))
+                .await;
+                continue;
+            }
+
+            // Determine zpool name prefix for M.2 vdevs
             let prefix = if filename.starts_with("m2_") {
                 "oxi_"
-            } else if filename.starts_with("u2_") {
-                "oxp_"
             } else {
                 let msg = format!("Unknown vdev prefix for '{filename}' — expected m2_ or u2_");
                 send(
@@ -1999,7 +2011,6 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
                         ),
                     );
                 })?;
-
             }
         }
 
