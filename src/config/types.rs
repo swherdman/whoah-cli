@@ -12,21 +12,11 @@ pub struct GlobalConfig {
 
 // --- Combined deployment view ---
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DeploymentConfig {
     pub deployment: DeploymentToml,
     pub build: BuildToml,
     pub monitoring: MonitoringToml,
-}
-
-impl Default for DeploymentConfig {
-    fn default() -> Self {
-        Self {
-            deployment: DeploymentToml::default(),
-            build: BuildToml::default(),
-            monitoring: MonitoringToml::default(),
-        }
-    }
 }
 
 // --- deployment.toml ---
