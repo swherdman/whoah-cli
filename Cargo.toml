@@ -2,8 +2,20 @@
 name = "whoah-cli"
 version = "0.1.1"
 edition = "2024"
-description = "TUI/CLI tool for managing Oxide-at-home deployments"
+description = "CLI to build, deploy, and monitor the Oxide computer stack in a lab environment"
 license = "MIT"
+repository = "https://github.com/swherdman/whoah-cli"
+homepage = "https://swherdman.com/projects/whoah/"
+readme = "README.md"
+keywords = ["tui", "cli", "ssh", "oxide", "deploy"]
+categories = ["command-line-utilities", "network-programming", "development-tools"]
+rust-version = "1.85"
+exclude = [
+    "demo/",
+    "scripts/",
+    ".github/",
+    "deny.toml",
+]
 
 [lib]
 name = "whoah"
@@ -61,7 +73,6 @@ chrono = { version = "0.4", features = ["serde"] }
 test-utils = []
 
 [dev-dependencies]
-whoah-cli = { path = ".", features = ["test-utils"] }
 insta = { version = "1", features = ["toml", "yaml"] }
 assert_cmd = "2"
 predicates = "3"

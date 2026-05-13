@@ -1,7 +1,7 @@
 # whoah-cli — We Have Oxide At Home CLI
 
 > [!WARNING]
-> **Pre-alpha software.** This project is under active development and not yet ready for general use. If you're interested in running Oxide at home and want to get involved, [reach out](https://swherdman.com/portfolio/whoah/).
+> **Pre-alpha software.** This project is under active development and not yet ready for general use. If you're interested in running Oxide at home and want to get involved, [reach out](https://swherdman.com/projects/whoah/).
 
 A TUI/CLI tool for deploying [Oxide](https://oxide.computer) on non-Oxide hardware. Automates the full lifecycle from VM provisioning through Omicron build and deployment, so you can run a real Oxide rack at home.
 
@@ -12,10 +12,11 @@ A TUI/CLI tool for deploying [Oxide](https://oxide.computer) on non-Oxide hardwa
 WHOAH automates the multi-step process of deploying Oxide's control plane on commodity hardware:
 
 1. **Provision** — Creates a VM on your hypervisor, installs Helios (Oxide's illumos distro), and configures networking
-2. **Configure** — Sets up SSH access, user accounts, and package caching for faster builds
-3. **Build** — Installs prerequisites, clones Omicron, applies configuration overrides, and compiles the full Oxide stack
-4. **Deploy** — Creates virtual hardware, installs the Omicron package, and verifies DNS and API health
+2. **Configure** — Sets up SSH access, user accounts, and build dependencies
+3. **Cache** — Configures a local nginx reverse proxy and squid SSL-bump forward proxy to accelerate package and artifact downloads during the build
+4. **Build** — Clones Omicron, applies configuration overrides, and compiles the full Oxide stack
 5. **Patch** — Applies necessary patches for non-native hardware (e.g., propolis string I/O emulation for nested virtualization)
+6. **Deploy** — Creates virtual hardware, installs the Omicron package, and verifies DNS and API health
 
 The TUI provides real-time progress tracking with streaming build output, a debug screen for SSH session monitoring, and a dashboard for monitoring your deployment.
 
@@ -31,13 +32,17 @@ The TUI provides real-time progress tracking with streaming build output, a debu
 ### Prerequisites
 
 - A Proxmox VE host with enough resources (4 cores, 48GB RAM, 256GB disk recommended)
-- The [Helios install ISO](https://docs.oxide.computer) available on your Proxmox storage
+- A Helios install ISO on your Proxmox storage — WHOAH can download it automatically from the Config tab (sourced from `https://pkg.oxide.computer/install/latest/helios-install-vga.iso`)
 - Rust toolchain on your local machine
 - [GitHub CLI](https://cli.github.com/) (`gh`) for the git ref selector (optional, falls back to curl)
 
 ### Install
 
 ```bash
+# From crates.io
+cargo install whoah-cli
+
+# From source
 git clone https://github.com/swherdman/whoah-cli.git
 cd whoah-cli
 cargo build --release
@@ -46,6 +51,8 @@ cargo build --release
 ### Launch
 
 ```bash
+whoah
+# or, if built from source:
 ./target/release/whoah
 ```
 
@@ -205,7 +212,7 @@ iso_file = "helios-install-vga.iso"
 
 ## Links
 
-- [Project page](https://swherdman.com/portfolio/whoah/)
+- [Project page](https://swherdman.com/projects/whoah/)
 - [Oxide Computer](https://oxide.computer)
 - [Omicron](https://github.com/oxidecomputer/omicron) — Oxide's control plane
 - [Propolis fork](https://github.com/swherdman/propolis) — Patched VMM with pre-built releases
