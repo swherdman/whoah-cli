@@ -364,7 +364,8 @@ impl BuildView {
             .title(title)
             .borders(ratatui::widgets::Borders::TOP)
             .border_style(Style::default().fg(border_color))
-            .title_style(Style::default().fg(p.text_tertiary));
+            .title_style(Style::default().fg(p.text_tertiary))
+            .style(Style::default().bg(p.bg_panel));
 
         let log_inner = block.inner(area);
         frame.render_widget(block, area);
