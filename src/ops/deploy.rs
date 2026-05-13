@@ -1944,18 +1944,13 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
 
             if let Some(pool_name) = existing_pool {
                 ssh.detail(&format!(
-                    "[{n}/{total}] {filename}: pool {pool_name} already exists — ensuring exported"
+                    "[{n}/{total}] {filename}: pool {pool_name} already imported — ensuring encryption feature"
                 ))
                 .await;
                 // Re-apply encryption feature unconditionally (handles partial-failure recovery)
                 let _ = ssh
                     .run(&format!(
                         "pfexec zpool set feature@encryption=enabled {pool_name} 2>/dev/null || true"
-                    ))
-                    .await;
-                let _ = ssh
-                    .run(&format!(
-                        "pfexec zpool export {pool_name} 2>/dev/null || true"
                     ))
                     .await;
             } else {
@@ -2005,17 +2000,6 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
                     );
                 })?;
 
-                ssh.run_check(&format!("pfexec zpool export {pool_name}"))
-                    .await
-                    .inspect_err(|e| {
-                        send(
-                            tx,
-                            BuildEvent::StepFailed(
-                                "deploy-preformat".into(),
-                                format!("zpool export failed for {pool_name}: {e}"),
-                            ),
-                        );
-                    })?;
             }
         }
 
