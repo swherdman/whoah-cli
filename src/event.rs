@@ -115,6 +115,28 @@ pub enum BuildEvent {
     },
 }
 
+impl BuildEvent {
+    /// One-line representation for the build log audit trail.
+    /// Returns `None` for `StepDetail` — those are captured by `LoggedSsh`.
+    pub fn display_for_log(&self) -> Option<String> {
+        match self {
+            BuildEvent::StepStarted(id) => Some(format!("StepStarted({id})")),
+            BuildEvent::StepDetail(..) => None,
+            BuildEvent::StepCompleted(id) => Some(format!("StepCompleted({id})")),
+            BuildEvent::StepFailed(id, msg) => Some(format!("StepFailed({id}): {msg}")),
+            BuildEvent::HostDiscovered { address, ssh_user } => {
+                Some(format!("HostDiscovered({ssh_user}@{address})"))
+            }
+            BuildEvent::CrateCount { step_id, total } => {
+                Some(format!("CrateCount{{step={step_id}, total={total}}}"))
+            }
+            BuildEvent::PipelineFinished { success } => {
+                Some(format!("PipelineFinished{{success={success}}}"))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Severity {
     #[allow(dead_code)]

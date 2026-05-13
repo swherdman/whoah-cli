@@ -125,7 +125,7 @@ async fn test_logged_ssh_streaming_then_run() {
     });
 
     let log_path = std::env::temp_dir().join("whoah-ssh-test.log");
-    let mut ssh = LoggedSsh::new(&host, log_path, &tx, "test-step")
+    let mut ssh = LoggedSsh::new(&host, log_path, &tx, "test-step", "TestSession")
         .await
         .expect("LoggedSsh::new failed");
 

@@ -9,13 +9,13 @@
 //! `tuning.zone_watchdog_enabled` in build.toml.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 
 use crate::config::HostConfig;
 use crate::event::BuildEvent;
-use crate::ssh::RemoteHost;
 use crate::ssh::session::SshHost;
 
 struct WatchdogRule {
@@ -35,19 +35,17 @@ struct WatchdogRule {
 }
 
 /// All built-in recovery rules. Extend here when new zone/SMF issues are found.
-static BUILTIN_RULES: &[WatchdogRule] = &[
-    WatchdogRule {
-        name: "ntp_zone",
-        zone_substring: "oxz_ntp",
-        // Failure B (unconditional): oxide/ntp has a hard require_all dep on
-        // ndp, but ndp is disabled in the NTP zone profile. Always enable it.
-        on_appear: &["svcadm enable network/routing/ndp"],
-        // Failure A (conditional, I/O-triggered): ipmgmtd times out and
-        // lands in maintenance under heavy concurrent I/O.
-        clear_if_maintenance: &["network/ip-interface-management"],
-        wait_online: &["oxide/ntp"],
-    },
-];
+static BUILTIN_RULES: &[WatchdogRule] = &[WatchdogRule {
+    name: "ntp_zone",
+    zone_substring: "oxz_ntp",
+    // Failure B (unconditional): oxide/ntp has a hard require_all dep on
+    // ndp, but ndp is disabled in the NTP zone profile. Always enable it.
+    on_appear: &["svcadm enable network/routing/ndp"],
+    // Failure A (conditional, I/O-triggered): ipmgmtd times out and
+    // lands in maintenance under heavy concurrent I/O.
+    clear_if_maintenance: &["network/ip-interface-management"],
+    wait_online: &["oxide/ntp"],
+}];
 
 /// Spawn as a background task alongside the `deploy-verify` loop.
 /// Monitors zone appearances and applies SMF recovery actions for known issues.
@@ -55,6 +53,7 @@ static BUILTIN_RULES: &[WatchdogRule] = &[
 /// The caller must abort the returned JoinHandle when verify completes.
 pub async fn run_zone_watchdog(
     helios_config: HostConfig,
+    log_path: PathBuf,
     tx: mpsc::UnboundedSender<BuildEvent>,
 ) {
     let host = match SshHost::connect(&helios_config).await {
@@ -69,6 +68,25 @@ pub async fn run_zone_watchdog(
     };
     host.set_label("Watchdog");
 
+    let mut ssh = match crate::ops::ssh_log::LoggedSsh::new(
+        &host,
+        log_path,
+        &tx,
+        "deploy-verify",
+        "Watchdog",
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = tx.send(BuildEvent::StepDetail(
+                "deploy-verify".into(),
+                format!("watchdog: failed to open log: {e}; NTP zone recovery disabled"),
+            ));
+            return;
+        }
+    };
+
     let _ = tx.send(BuildEvent::StepDetail(
         "deploy-verify".into(),
         "watchdog: active".into(),
@@ -82,7 +100,8 @@ pub async fn run_zone_watchdog(
     let mut online_seen: HashSet<(String, &'static str)> = HashSet::new();
 
     loop {
-        let zone_out = match host.execute("zoneadm list -cp").await {
+        // Poll zone list — file only (run_quiet), not TUI.
+        let zone_out = match ssh.run_quiet("zoneadm list -cp").await {
             Ok(o) => o,
             Err(_) => {
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -100,14 +119,20 @@ pub async fn run_zone_watchdog(
             .collect();
 
         for rule in BUILTIN_RULES {
-            for zone in running.iter().filter(|z: &&String| z.contains(rule.zone_substring)) {
+            for zone in running
+                .iter()
+                .filter(|z: &&String| z.contains(rule.zone_substring))
+            {
                 // Validate zone name before embedding in shell commands. Illumos zone
                 // names are restricted to [a-zA-Z0-9_-.] — anything else is unexpected
                 // and could break the single-quoted zlogin invocation.
                 if !zone_name_is_safe(zone) {
                     let _ = tx.send(BuildEvent::StepDetail(
                         "deploy-verify".into(),
-                        format!("watchdog [{}]: skipping zone with unexpected name: {zone:?}", rule.name),
+                        format!(
+                            "watchdog [{}]: skipping zone with unexpected name: {zone:?}",
+                            rule.name
+                        ),
                     ));
                     continue;
                 }
@@ -117,7 +142,8 @@ pub async fn run_zone_watchdog(
                 if !on_appear_done.contains(&appear_key) {
                     for cmd in rule.on_appear {
                         let full = format!("pfexec zlogin {zone} '{cmd}'");
-                        match host.execute(&full).await {
+                        // run_quiet: full I/O goes to log file; human-readable summary to TUI.
+                        match ssh.run_quiet(&full).await {
                             Ok(r) if r.exit_code == 0 => {
                                 let _ = tx.send(BuildEvent::StepDetail(
                                     "deploy-verify".into(),
@@ -138,7 +164,10 @@ pub async fn run_zone_watchdog(
                             Err(e) => {
                                 let _ = tx.send(BuildEvent::StepDetail(
                                     "deploy-verify".into(),
-                                    format!("watchdog [{}]: {cmd} in {zone} failed: {e}", rule.name),
+                                    format!(
+                                        "watchdog [{}]: {cmd} in {zone} failed: {e}",
+                                        rule.name
+                                    ),
                                 ));
                             }
                         }
@@ -153,10 +182,12 @@ pub async fn run_zone_watchdog(
                         continue;
                     }
 
-                    let state_cmd =
-                        format!("pfexec zlogin {zone} 'svcs -H -o state {fmri} 2>/dev/null || true'");
-                    let state = host
-                        .execute(&state_cmd)
+                    // State query — file only.
+                    let state_cmd = format!(
+                        "pfexec zlogin {zone} 'svcs -H -o state {fmri} 2>/dev/null || true'"
+                    );
+                    let state = ssh
+                        .run_quiet(&state_cmd)
                         .await
                         .map(|r| r.stdout.trim().to_string())
                         .unwrap_or_default();
@@ -166,9 +197,14 @@ pub async fn run_zone_watchdog(
                         // svcs -H -o state reports when a service is offline waiting
                         // on a dependency that is in maintenance.
                         "maintenance" | "offline*" => {
-                            let clear_cmd =
-                                format!("pfexec zlogin {zone} 'svcadm clear {fmri}'");
-                            let _ = host.execute(&clear_cmd).await;
+                            // Capture svcs -xv for forensic diagnosis before clearing.
+                            // run() sends the command to TUI so the operator sees it.
+                            let xv_cmd = format!("pfexec zlogin {zone} 'svcs -xv {fmri}'");
+                            let _ = ssh.run(&xv_cmd).await;
+
+                            // Clear the service — file only; human summary goes to TUI below.
+                            let clear_cmd = format!("pfexec zlogin {zone} 'svcadm clear {fmri}'");
+                            let _ = ssh.run_quiet(&clear_cmd).await;
                             let _ = tx.send(BuildEvent::StepDetail(
                                 "deploy-verify".into(),
                                 format!(
@@ -192,9 +228,11 @@ pub async fn run_zone_watchdog(
                         continue;
                     }
 
-                    let state_cmd =
-                        format!("pfexec zlogin {zone} 'svcs -H -o state {fmri} 2>/dev/null || true'");
-                    if let Ok(r) = host.execute(&state_cmd).await
+                    // State query — file only.
+                    let state_cmd = format!(
+                        "pfexec zlogin {zone} 'svcs -H -o state {fmri} 2>/dev/null || true'"
+                    );
+                    if let Ok(r) = ssh.run_quiet(&state_cmd).await
                         && r.stdout.trim() == "online"
                     {
                         let _ = tx.send(BuildEvent::StepDetail(
@@ -212,7 +250,9 @@ pub async fn run_zone_watchdog(
 }
 
 fn zone_name_is_safe(name: &str) -> bool {
-    !name.chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '-' | '.'))
+    !name
+        .chars()
+        .any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '-' | '.'))
 }
 
 #[cfg(test)]

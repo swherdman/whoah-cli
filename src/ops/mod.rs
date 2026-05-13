@@ -1,5 +1,4 @@
 pub mod demo;
-pub mod watchdog;
 pub mod deploy;
 pub mod discover;
 pub mod hypervisor_proxmox_validate;
@@ -13,3 +12,4 @@ pub mod recover;
 pub mod serial;
 pub mod ssh_log;
 pub mod status;
+pub mod watchdog;

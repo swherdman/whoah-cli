@@ -6,6 +6,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+use tokio::io::AsyncWriteExt;
+
 use color_eyre::{Result, eyre::eyre};
 use tokio::sync::mpsc;
 
@@ -23,9 +25,13 @@ pub async fn run_deploy(
     deployment_name: String,
     tx: mpsc::UnboundedSender<BuildEvent>,
 ) -> Result<()> {
-    // Create consolidated build log
+    // Create consolidated build log and write the static header immediately —
+    // before any SerialConsole or SSH sessions open the file, so the header
+    // always appears at the top. The resolved helios address+user are not yet
+    // known; they will appear later as [Event] HostDiscovered(...) lines.
     let build_log = crate::config::loader::build_log_path(&deployment_name)?;
     tracing::info!("Build log: {}", build_log.display());
+    write_deploy_header(&build_log, &deployment_name, &config).await;
 
     let resolved_proxmox = resolve_proxmox_config(&config.deployment)?;
 
@@ -44,7 +50,7 @@ pub async fn run_deploy(
         let ip = run_provision(&pve, proxmox_config, &tx, &build_log).await?;
 
         // Phase 3: Configure Access
-        let user = run_configure_access(&ip, &tx).await?;
+        let user = run_configure_access(&ip, &tx, &build_log).await?;
 
         let _ = pve.close().await;
         (ip, user)
@@ -116,13 +122,16 @@ pub async fn run_deploy(
     };
 
     // Notify the App of the host IP (updates config if discovered dynamically)
-    send(
+    // and persist the resolved address to the build log as a forensic timestamp.
+    audit_send(
         &tx,
+        &build_log,
         BuildEvent::HostDiscovered {
             address: helios_ip.clone(),
             ssh_user: ssh_user.clone(),
         },
-    );
+    )
+    .await;
 
     // Resolve which IPS publisher this omicron commit uses before starting the cache.
     // This must happen before cache-start so ensure_caches can compute the right URL.
@@ -140,7 +149,7 @@ pub async fn run_deploy(
             })?;
 
     // Phase 4: Cache Setup
-    run_setup_pkg_cache(&helios_ip, &ssh_user, publisher.clone(), &tx).await?;
+    run_setup_pkg_cache(&helios_ip, &ssh_user, publisher.clone(), &tx, &build_log).await?;
 
     // Phase 5: OS Setup
     run_os_setup(
@@ -165,10 +174,11 @@ async fn run_provision(
     tx: &mpsc::UnboundedSender<BuildEvent>,
     build_log: &Path,
 ) -> Result<String> {
+    let log_path = build_log.to_path_buf();
     let vmid = config.vm.vmid;
 
     // Step: Create Proxmox VM
-    send(tx, BuildEvent::StepStarted("prov-create".into()));
+    audit_send(tx, &log_path, BuildEvent::StepStarted("prov-create".into())).await;
     send(
         tx,
         BuildEvent::StepDetail(
@@ -200,7 +210,7 @@ async fn run_provision(
     }
 
     // Step: Boot Helios ISO
-    send(tx, BuildEvent::StepStarted("prov-boot".into()));
+    audit_send(tx, &log_path, BuildEvent::StepStarted("prov-boot".into())).await;
     send(
         tx,
         BuildEvent::StepDetail("prov-boot".into(), format!("Starting VM {vmid}...")),
@@ -230,10 +240,15 @@ async fn run_provision(
         return Err(e);
     }
 
-    send(tx, BuildEvent::StepCompleted("prov-boot".into()));
+    audit_send(tx, &log_path, BuildEvent::StepCompleted("prov-boot".into())).await;
 
     // Step: Install Helios via serial console
-    send(tx, BuildEvent::StepStarted("prov-install".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("prov-install".into()),
+    )
+    .await;
     send(
         tx,
         BuildEvent::StepDetail(
@@ -372,7 +387,8 @@ async fn run_provision(
             e
         })?;
 
-    // Eject ISO and change boot order to disk before rebooting
+    // Eject ISO and change boot order to disk before rebooting.
+    // Use LoggedSsh so these PVE management commands appear in the build log.
     send(
         tx_ref,
         BuildEvent::StepDetail(
@@ -380,11 +396,20 @@ async fn run_provision(
             "Ejecting ISO and setting boot to disk...".into(),
         ),
     );
+    pve.set_label("Proxmox");
+    let mut pve_ssh = crate::ops::ssh_log::LoggedSsh::new(
+        pve,
+        build_log.to_path_buf(),
+        tx_ref,
+        "prov-install",
+        "Proxmox",
+    )
+    .await?;
     let eject_cmd = format!(
         "qm set {} --ide2 none,media=cdrom --boot order=sata0",
         config.vm.vmid
     );
-    let eject_result = pve.execute(&eject_cmd).await?;
+    let eject_result = pve_ssh.run(&eject_cmd).await?;
     if eject_result.exit_code != 0 {
         send(
             tx_ref,
@@ -409,7 +434,7 @@ async fn run_provision(
             "Stopping VM to apply boot config...".into(),
         ),
     );
-    let stop_result = pve.execute(&format!("qm stop {vmid}")).await?;
+    let stop_result = pve_ssh.run(&format!("qm stop {vmid}")).await?;
     if stop_result.exit_code != 0 {
         // VM might have already shut down from the install
         tracing::warn!(
@@ -722,9 +747,12 @@ async fn run_provision(
 async fn run_configure_access(
     helios_ip: &str,
     tx: &mpsc::UnboundedSender<BuildEvent>,
+    build_log: &Path,
 ) -> Result<String> {
+    let log_path = build_log.to_path_buf();
+
     // Step: Send SSH keys
-    send(tx, BuildEvent::StepStarted("access-keys".into()));
+    audit_send(tx, &log_path, BuildEvent::StepStarted("access-keys".into())).await;
     send(
         tx,
         BuildEvent::StepDetail("access-keys".into(), "Generating userdata script...".into()),
@@ -773,10 +801,20 @@ async fn run_configure_access(
     // Give the remote script a moment to execute
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    send(tx, BuildEvent::StepCompleted("access-keys".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("access-keys".into()),
+    )
+    .await;
 
     // Step: Verify SSH connectivity
-    send(tx, BuildEvent::StepStarted("access-verify".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("access-verify".into()),
+    )
+    .await;
     send(
         tx,
         BuildEvent::StepDetail(
@@ -801,8 +839,17 @@ async fn run_configure_access(
         e
     })?;
 
-    // Run a quick command to verify
-    let output = helios.execute("hostname").await.map_err(|e| {
+    // Log the SSH probe via LoggedSsh so the hostname output lands in the build log.
+    helios.set_label("Build/access-verify");
+    let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
+        &helios,
+        log_path.clone(),
+        tx,
+        "access-verify",
+        "Build/access-verify",
+    )
+    .await?;
+    let output = ssh.run("hostname").await.map_err(|e| {
         send(
             tx,
             BuildEvent::StepFailed("access-verify".into(), format!("Command failed: {e}")),
@@ -819,7 +866,12 @@ async fn run_configure_access(
     );
 
     let _ = helios.close().await;
-    send(tx, BuildEvent::StepCompleted("access-verify".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("access-verify".into()),
+    )
+    .await;
 
     Ok(username)
 }
@@ -942,11 +994,17 @@ async fn run_os_setup(
     helios.set_label("Build/pkg-update");
 
     // --- Step: OS update + reboot ---
-    send(tx, BuildEvent::StepStarted("os-update".into()));
+    audit_send(tx, &log_path, BuildEvent::StepStarted("os-update".into())).await;
 
     {
-        let mut ssh =
-            crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.clone(), tx, "os-update").await?;
+        let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
+            &helios,
+            log_path.clone(),
+            tx,
+            "os-update",
+            "Build/pkg-update",
+        )
+        .await?;
 
         // Bootstrap pkg(7) itself before the OS update. On old seed images pkg(7)
         // is stale and `pkg update` exits 1 immediately demanding this bootstrap
@@ -983,20 +1041,20 @@ async fn run_os_setup(
         if be_count <= 1 {
             // Only one BE — no update happened
             ssh.detail("Already up to date — skipping reboot").await;
-            send(tx, BuildEvent::StepCompleted("os-update".into()));
+            audit_send(tx, &log_path, BuildEvent::StepCompleted("os-update".into())).await;
 
             // Skip os-reboot step
-            send(tx, BuildEvent::StepStarted("os-reboot".into()));
+            audit_send(tx, &log_path, BuildEvent::StepStarted("os-reboot".into())).await;
             send(
                 tx,
                 BuildEvent::StepDetail("os-reboot".into(), "Skipped — no update".into()),
             );
-            send(tx, BuildEvent::StepCompleted("os-reboot".into()));
+            audit_send(tx, &log_path, BuildEvent::StepCompleted("os-reboot".into())).await;
         } else {
-            send(tx, BuildEvent::StepCompleted("os-update".into()));
+            audit_send(tx, &log_path, BuildEvent::StepCompleted("os-update".into())).await;
 
             // --- Step: os-reboot ---
-            send(tx, BuildEvent::StepStarted("os-reboot".into()));
+            audit_send(tx, &log_path, BuildEvent::StepStarted("os-reboot".into())).await;
             send(
                 tx,
                 BuildEvent::StepDetail("os-reboot".into(), "Rebooting for OS update...".into()),
@@ -1020,7 +1078,7 @@ async fn run_os_setup(
             // Wait for SSH to come back
             wait_for_ssh(helios_ip, ssh_user, Duration::from_secs(300)).await?;
 
-            send(tx, BuildEvent::StepCompleted("os-reboot".into()));
+            audit_send(tx, &log_path, BuildEvent::StepCompleted("os-reboot".into())).await;
 
             return continue_os_setup_after_reboot(
                 helios_ip, ssh_user, publisher, config, tx, &log_path,
@@ -1052,9 +1110,14 @@ async fn continue_os_setup_after_reboot(
 
     let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/OS-setup");
-    let mut ssh =
-        crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.to_path_buf(), tx, "os-cleanup")
-            .await?;
+    let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
+        &helios,
+        log_path.to_path_buf(),
+        tx,
+        "os-cleanup",
+        "Build/OS-setup",
+    )
+    .await?;
 
     // Re-set pkg publisher and HTTPS proxy (new BE has original publisher)
     ssh.detail("Re-setting caches after reboot...").await;
@@ -1073,7 +1136,7 @@ async fn continue_os_setup_after_reboot(
     ssh.set_proxy(&cache_info.https_proxy_url, &ca_path);
 
     // --- Step: Delete old boot environments ---
-    send(tx, BuildEvent::StepStarted("os-cleanup".into()));
+    audit_send(tx, log_path, BuildEvent::StepStarted("os-cleanup".into())).await;
     ssh.detail("Listing boot environments...").await;
     let be_output = ssh.run("beadm list -H").await?;
 
@@ -1090,10 +1153,10 @@ async fn continue_os_setup_after_reboot(
             }
         }
     }
-    send(tx, BuildEvent::StepCompleted("os-cleanup".into()));
+    audit_send(tx, log_path, BuildEvent::StepCompleted("os-cleanup".into())).await;
 
     // --- Step: Install packages ---
-    send(tx, BuildEvent::StepStarted("os-packages".into()));
+    audit_send(tx, log_path, BuildEvent::StepStarted("os-packages".into())).await;
     ssh.set_step("os-packages");
     ssh.detail("Installing required packages...").await;
 
@@ -1114,10 +1177,15 @@ async fn continue_os_setup_after_reboot(
             .await;
         return Err(eyre!("pkg install failed"));
     }
-    send(tx, BuildEvent::StepCompleted("os-packages".into()));
+    audit_send(
+        tx,
+        log_path,
+        BuildEvent::StepCompleted("os-packages".into()),
+    )
+    .await;
 
     // --- Step: Install Rust ---
-    send(tx, BuildEvent::StepStarted("os-rust".into()));
+    audit_send(tx, log_path, BuildEvent::StepStarted("os-rust".into())).await;
     ssh.set_step("os-rust");
 
     let toolchain = config
@@ -1149,10 +1217,10 @@ async fn continue_os_setup_after_reboot(
         ssh.detail(&format!("Installed: {}", verify.stdout.trim()))
             .await;
     }
-    send(tx, BuildEvent::StepCompleted("os-rust".into()));
+    audit_send(tx, log_path, BuildEvent::StepCompleted("os-rust".into())).await;
 
     // --- Step: Configure swap ---
-    send(tx, BuildEvent::StepStarted("os-swap".into()));
+    audit_send(tx, log_path, BuildEvent::StepStarted("os-swap".into())).await;
     ssh.set_step("os-swap");
     ssh.detail("Checking swap...").await;
 
@@ -1178,7 +1246,7 @@ async fn continue_os_setup_after_reboot(
             .await?;
         ssh.detail("Swap configured").await;
     }
-    send(tx, BuildEvent::StepCompleted("os-swap".into()));
+    audit_send(tx, log_path, BuildEvent::StepCompleted("os-swap".into())).await;
 
     let _ = helios.close().await;
     Ok(())
@@ -1205,8 +1273,20 @@ async fn run_omicron_build(
 
     let helios = SshHost::connect(&helios_config).await?;
     helios.set_label("Build/Omicron");
-    let mut ssh =
-        crate::ops::ssh_log::LoggedSsh::new(&helios, log_path.clone(), tx, "repo-clone").await?;
+    let mut ssh = crate::ops::ssh_log::LoggedSsh::new(
+        &helios,
+        log_path.clone(),
+        tx,
+        "repo-clone",
+        "Build/Omicron",
+    )
+    .await?;
+
+    // Host-state snapshot: capture uname, zpool layout, and network links at
+    // deploy start. Goes to log file only (run_quiet).
+    let _ = ssh.run_quiet("uname -a").await;
+    let _ = ssh.run_quiet("zpool list").await;
+    let _ = ssh.run_quiet("dladm show-link 2>/dev/null").await;
 
     // Re-set proxy for HTTPS downloads
     let cache_info = crate::ops::pkg_cache::ensure_caches(publisher).await?;
@@ -1220,7 +1300,7 @@ async fn run_omicron_build(
     let network = &config.deployment.network;
 
     // --- Step: Clone omicron ---
-    send(tx, BuildEvent::StepStarted("repo-clone".into()));
+    audit_send(tx, &log_path, BuildEvent::StepStarted("repo-clone".into())).await;
     ssh.detail("Cloning omicron repository...").await;
 
     let omicron_url = config
@@ -1250,10 +1330,20 @@ async fn run_omicron_build(
             .await?;
     }
 
-    send(tx, BuildEvent::StepCompleted("repo-clone".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("repo-clone".into()),
+    )
+    .await;
 
     // --- Step: Configure build (network IPs, source overrides, vdev count) ---
-    send(tx, BuildEvent::StepStarted("repo-configure".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("repo-configure".into()),
+    )
+    .await;
     ssh.set_step("repo-configure");
     ssh.detail("Configuring build parameters...").await;
 
@@ -1469,10 +1559,20 @@ print('Updated vdevs to {vdev_count}')
     ))
     .await;
 
-    send(tx, BuildEvent::StepCompleted("repo-configure".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("repo-configure".into()),
+    )
+    .await;
 
     // --- Step: Install builder prerequisites ---
-    send(tx, BuildEvent::StepStarted("build-prereqs-builder".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("build-prereqs-builder".into()),
+    )
+    .await;
     ssh.set_step("build-prereqs-builder");
     ssh.detail("Installing builder prerequisites...").await;
 
@@ -1492,21 +1592,22 @@ print('Updated vdevs to {vdev_count}')
                 SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} \
          ./tools/install_builder_prerequisites.sh -y' 2>&1"
     ))
-    .await
-    .inspect_err(|e| {
-        send(
-            tx,
-            BuildEvent::StepFailed("build-prereqs-builder".into(), e.to_string()),
-        );
-    })?;
+    .await?;
 
-    send(
+    audit_send(
         tx,
+        &log_path,
         BuildEvent::StepCompleted("build-prereqs-builder".into()),
-    );
+    )
+    .await;
 
     // --- Step: Install runner prerequisites ---
-    send(tx, BuildEvent::StepStarted("build-prereqs-runner".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("build-prereqs-runner".into()),
+    )
+    .await;
     ssh.set_step("build-prereqs-runner");
     ssh.detail("Installing runner prerequisites...").await;
 
@@ -1520,18 +1621,22 @@ print('Updated vdevs to {vdev_count}')
                 SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} \
          ./tools/install_runner_prerequisites.sh -y' 2>&1"
     ))
-    .await
-    .inspect_err(|e| {
-        send(
-            tx,
-            BuildEvent::StepFailed("build-prereqs-runner".into(), e.to_string()),
-        );
-    })?;
+    .await?;
 
-    send(tx, BuildEvent::StepCompleted("build-prereqs-runner".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("build-prereqs-runner".into()),
+    )
+    .await;
 
     // --- Step: Fix file ownership ---
-    send(tx, BuildEvent::StepStarted("build-fix-perms".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("build-fix-perms".into()),
+    )
+    .await;
     ssh.set_step("build-fix-perms");
     ssh.detail("Fixing file ownership...").await;
 
@@ -1539,10 +1644,20 @@ print('Updated vdevs to {vdev_count}')
         "pfexec chown -R {ssh_user}:staff ~/.cargo ~/.rustup {repo_path}/target {repo_path}/out 2>/dev/null || true"
     )).await?;
 
-    send(tx, BuildEvent::StepCompleted("build-fix-perms".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("build-fix-perms".into()),
+    )
+    .await;
 
     // --- Step: Compile omicron-package binary ---
-    send(tx, BuildEvent::StepStarted("build-compile".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("build-compile".into()),
+    )
+    .await;
     ssh.set_step("build-compile");
     ssh.detail("Compiling omicron-package...").await;
 
@@ -1551,6 +1666,8 @@ print('Updated vdevs to {vdev_count}')
         let count_tx = tx.clone();
         let count_config = helios_config.clone();
         let count_repo = repo_path.to_string();
+        let count_log = log_path.clone();
+        let count_audit_log = log_path.clone();
         tokio::spawn(async move {
             let count_ssh = match SshHost::connect(&count_config).await {
                 Ok(h) => h,
@@ -1559,22 +1676,41 @@ print('Updated vdevs to {vdev_count}')
                     return;
                 }
             };
-            let result = count_ssh
-                .execute(&format!(
-                    "cd {count_repo} && bash -c '. ~/.cargo/env && source env.sh && \
+            count_ssh.set_label("CrateCount");
+            let mut logged = match crate::ops::ssh_log::LoggedSsh::new(
+                &count_ssh,
+                count_log,
+                &count_tx,
+                "build-compile",
+                "CrateCount",
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::debug!("Crate count log open failed (non-fatal): {e}");
+                    return;
+                }
+            };
+            let cmd = format!(
+                "cd {count_repo} && bash -c '. ~/.cargo/env && source env.sh && \
                  cargo tree --prefix none -e normal,build -p omicron-package 2>/dev/null | \
                  sed \"s/ (.*//\" | sort -u | wc -l'"
-                ))
-                .await;
-            match result {
+            );
+            match logged.run_quiet(&cmd).await {
                 Ok(output) if output.exit_code == 0 => {
                     if let Ok(total) = output.stdout.trim().parse::<u32>()
                         && total > 0
                     {
-                        let _ = count_tx.send(BuildEvent::CrateCount {
-                            step_id: "build-compile".into(),
-                            total,
-                        });
+                        audit_send(
+                            &count_tx,
+                            &count_audit_log,
+                            BuildEvent::CrateCount {
+                                step_id: "build-compile".into(),
+                                total,
+                            },
+                        )
+                        .await;
                     }
                 }
                 _ => tracing::debug!("cargo tree query failed (non-fatal)"),
@@ -1591,18 +1727,22 @@ print('Updated vdevs to {vdev_count}')
                 SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} && \
          cargo build --release --bin omicron-package' 2>&1"
     ))
-    .await
-    .inspect_err(|e| {
-        send(
-            tx,
-            BuildEvent::StepFailed("build-compile".into(), e.to_string()),
-        );
-    })?;
+    .await?;
 
-    send(tx, BuildEvent::StepCompleted("build-compile".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("build-compile".into()),
+    )
+    .await;
 
     // --- Step: Package components ---
-    send(tx, BuildEvent::StepStarted("build-package".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("build-package".into()),
+    )
+    .await;
     ssh.set_step("build-package");
     ssh.detail("Creating packaging target...").await;
 
@@ -1624,6 +1764,7 @@ print('Updated vdevs to {vdev_count}')
     let log_tail_tx = tx.clone();
     let log_tail_host = helios_config.clone();
     let log_tail_path = log_file_path.clone();
+    let log_tail_log = log_path.clone();
     let log_tail_handle = tokio::spawn(async move {
         // Connect a separate SSH session for tailing
         let tail_ssh = match SshHost::connect(&log_tail_host).await {
@@ -1633,6 +1774,7 @@ print('Updated vdevs to {vdev_count}')
                 return;
             }
         };
+        tail_ssh.set_label("LogTail");
         // Truncate the LOG file first so we only see events from this run
         let _ = tail_ssh.execute(&format!("> {log_tail_path}")).await;
 
@@ -1644,7 +1786,22 @@ print('Updated vdevs to {vdev_count}')
             let _ = tail_ssh.execute_streaming(&tail_cmd, line_tx).await;
         });
 
+        // Open the build log for inline appending — all raw lines land on disk
+        // regardless of whether parse_omicron_pkg_line accepts them for the TUI.
+        let mut build_log_file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_tail_log)
+            .await
+            .ok();
+
         while let Some(line) = line_rx.recv().await {
+            // Write every line to the build log with a [LogTail] prefix.
+            if let Some(ref mut f) = build_log_file {
+                let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
+                let entry = format!("[{timestamp}] [{:<16}]     {line}\n", "LogTail");
+                let _ = f.write_all(entry.as_bytes()).await;
+            }
             if crate::parse::omicron_pkg_log::parse_omicron_pkg_line(&line).is_some() {
                 // Send raw JSON line — app.rs parses and tracks via OmicronPkgTracker
                 let _ = log_tail_tx.send(BuildEvent::StepDetail("build-package".into(), line));
@@ -1661,21 +1818,20 @@ print('Updated vdevs to {vdev_count}')
                 SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} && \
          ./target/release/omicron-package package' 2>&1"
     ))
-    .await
-    .inspect_err(|e| {
-        send(
-            tx,
-            BuildEvent::StepFailed("build-package".into(), e.to_string()),
-        );
-    })?;
+    .await?;
 
     // Abort the LOG tail task — the packaging command is done
     log_tail_handle.abort();
 
-    send(tx, BuildEvent::StepCompleted("build-package".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("build-package".into()),
+    )
+    .await;
 
     // --- Step: Patch propolis (download pre-built binary from GitHub release) ---
-    send(tx, BuildEvent::StepStarted("build-patch".into()));
+    audit_send(tx, &log_path, BuildEvent::StepStarted("build-patch".into())).await;
     ssh.set_step("build-patch");
     ssh.detail("Checking for patched propolis binary...").await;
 
@@ -1708,7 +1864,12 @@ print('Updated vdevs to {vdev_count}')
 
     if !propolis_patched {
         ssh.detail("Propolis patching disabled, skipping").await;
-        send(tx, BuildEvent::StepCompleted("build-patch".into()));
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepCompleted("build-patch".into()),
+        )
+        .await;
     } else if matches!(
         propolis_source,
         Some(crate::config::PropolisSource::LocalBuild)
@@ -1729,7 +1890,12 @@ print('Updated vdevs to {vdev_count}')
             ssh.detail("Warning: local-build source but no local_binary path set")
                 .await;
         }
-        send(tx, BuildEvent::StepCompleted("build-patch".into()));
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepCompleted("build-patch".into()),
+        )
+        .await;
     } else {
         // GitHub release source (default)
 
@@ -1786,11 +1952,16 @@ print('Updated vdevs to {vdev_count}')
                 .await;
         }
 
-        send(tx, BuildEvent::StepCompleted("build-patch".into()));
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepCompleted("build-patch".into()),
+        )
+        .await;
     } // end else (GitHub release path)
 
     // --- Step: Create virtual hardware ---
-    send(tx, BuildEvent::StepStarted("deploy-vhw".into()));
+    audit_send(tx, &log_path, BuildEvent::StepStarted("deploy-vhw".into())).await;
     ssh.set_step("deploy-vhw");
     ssh.detail("Creating virtual hardware...").await;
 
@@ -1821,14 +1992,24 @@ print('Updated vdevs to {vdev_count}')
         );
     })?;
 
-    send(tx, BuildEvent::StepCompleted("deploy-vhw".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("deploy-vhw".into()),
+    )
+    .await;
 
     // --- Step: Pre-format synthetic vdevs (sequential zpool create) ---
     // Eliminates the ~20 min switch-zone init delay caused by sled-agent
     // issuing all zpool-create calls concurrently at startup (see
     // docs/TROUBLESHOOTING-zone-convergence.md, Root Cause 2).
     if config.build.tuning.pre_format_vdevs.unwrap_or(true) {
-        send(tx, BuildEvent::StepStarted("deploy-preformat".into()));
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepStarted("deploy-preformat".into()),
+        )
+        .await;
         ssh.set_step("deploy-preformat");
         ssh.detail(
             "Pre-formatting M.2 synthetic vdevs sequentially \
@@ -2014,11 +2195,21 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
             }
         }
 
-        send(tx, BuildEvent::StepCompleted("deploy-preformat".into()));
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepCompleted("deploy-preformat".into()),
+        )
+        .await;
     }
 
     // --- Step: Install omicron ---
-    send(tx, BuildEvent::StepStarted("deploy-install".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("deploy-install".into()),
+    )
+    .await;
     ssh.set_step("deploy-install");
     ssh.detail("Installing omicron...").await;
 
@@ -2026,18 +2217,22 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
          pfexec ./target/release/omicron-package install' 2>&1"
     ))
-    .await
-    .inspect_err(|e| {
-        send(
-            tx,
-            BuildEvent::StepFailed("deploy-install".into(), e.to_string()),
-        );
-    })?;
+    .await?;
 
-    send(tx, BuildEvent::StepCompleted("deploy-install".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("deploy-install".into()),
+    )
+    .await;
 
     // --- Step: Verify deployment (integrated zone wait + DNS + API) ---
-    send(tx, BuildEvent::StepStarted("deploy-verify".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("deploy-verify".into()),
+    )
+    .await;
     ssh.set_step("deploy-verify");
 
     // AbortOnDrop ensures the watchdog is cancelled on any exit path from this
@@ -2051,15 +2246,18 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         }
     }
 
-    let _watchdog = AbortOnDrop(if config.build.tuning.zone_watchdog_enabled.unwrap_or(true) {
-        let wd_cfg = helios_config.clone();
-        let wd_tx = tx.clone();
-        Some(tokio::spawn(async move {
-            crate::ops::watchdog::run_zone_watchdog(wd_cfg, wd_tx).await;
-        }))
-    } else {
-        None
-    });
+    let _watchdog = AbortOnDrop(
+        if config.build.tuning.zone_watchdog_enabled.unwrap_or(true) {
+            let wd_cfg = helios_config.clone();
+            let wd_tx = tx.clone();
+            let wd_log = log_path.clone();
+            Some(tokio::spawn(async move {
+                crate::ops::watchdog::run_zone_watchdog(wd_cfg, wd_log, wd_tx).await;
+            }))
+        } else {
+            None
+        },
+    );
 
     let expected_zones = crate::config::derive_expected_zones(overrides);
     let expected_total: u32 = expected_zones.values().sum();
@@ -2080,13 +2278,11 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
 
     let mut dns_ok = false;
     let mut api_ok = false;
-    let dns_checked = false;
-    let api_checked = false;
 
     // Integrated polling loop: poll zone status and trigger DNS/API checks
     // as soon as the relevant zones come up
     for attempt in 0..360 {
-        let zone_output = ssh.run("zoneadm list -cp").await?;
+        let zone_output = ssh.run_quiet("zoneadm list -cp").await?;
         let zone_lines: Vec<&str> = zone_output
             .stdout
             .lines()
@@ -2107,8 +2303,6 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         // Build summary
         let dns_status = if dns_ok {
             "DNS: OK"
-        } else if dns_checked {
-            "DNS: checking..."
         } else if dns_running > 0 {
             "DNS: zones up"
         } else {
@@ -2116,8 +2310,6 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         };
         let api_status = if api_ok {
             "API: OK"
-        } else if api_checked {
-            "API: checking..."
         } else if nexus_running > 0 {
             "API: zones up"
         } else {
@@ -2196,7 +2388,12 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
-    send(tx, BuildEvent::StepCompleted("deploy-verify".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("deploy-verify".into()),
+    )
+    .await;
 
     // Resolve nexus_ip for config steps — must come from DNS
     let nexus_ip = if dns_ok {
@@ -2207,24 +2404,49 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         resolved.lines().next().unwrap_or(&resolved).to_string()
     } else {
         tracing::warn!("DNS never resolved — skipping quota and IP pool configuration");
-        send(tx, BuildEvent::StepStarted("config-quotas".into()));
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepStarted("config-quotas".into()),
+        )
+        .await;
         send(
             tx,
             BuildEvent::StepDetail("config-quotas".into(), "Skipped — DNS not available".into()),
         );
-        send(tx, BuildEvent::StepCompleted("config-quotas".into()));
-        send(tx, BuildEvent::StepStarted("config-ippool".into()));
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepCompleted("config-quotas".into()),
+        )
+        .await;
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepStarted("config-ippool".into()),
+        )
+        .await;
         send(
             tx,
             BuildEvent::StepDetail("config-ippool".into(), "Skipped — DNS not available".into()),
         );
-        send(tx, BuildEvent::StepCompleted("config-ippool".into()));
+        audit_send(
+            tx,
+            &log_path,
+            BuildEvent::StepCompleted("config-ippool".into()),
+        )
+        .await;
         let _ = helios.close().await;
         return Ok(());
     };
 
     // --- Step: Set silo quotas ---
-    send(tx, BuildEvent::StepStarted("config-quotas".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("config-quotas".into()),
+    )
+    .await;
     ssh.set_step("config-quotas");
     ssh.detail("Setting silo quotas...").await;
 
@@ -2238,7 +2460,7 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
          -c /tmp/oxide-cookie 2>/dev/null",
         nexus.silo_name, nexus.username, nexus.password
     );
-    let auth_result = ssh.run(&auth_cmd).await?;
+    let auth_result = ssh.run_redacted(&auth_cmd, &[&nexus.password]).await?;
     if auth_result.exit_code != 0 {
         ssh.detail("Warning: Nexus auth failed, quotas may not be set")
             .await;
@@ -2255,10 +2477,20 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         ssh.detail("Silo quotas set").await;
     }
 
-    send(tx, BuildEvent::StepCompleted("config-quotas".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("config-quotas".into()),
+    )
+    .await;
 
     // --- Step: Create IP pool ---
-    send(tx, BuildEvent::StepStarted("config-ippool".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("config-ippool".into()),
+    )
+    .await;
     ssh.set_step("config-ippool");
     ssh.detail("Creating IP pool...").await;
 
@@ -2306,7 +2538,12 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         ssh.detail("Skipped — auth failed earlier").await;
     }
 
-    send(tx, BuildEvent::StepCompleted("config-ippool".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("config-ippool".into()),
+    )
+    .await;
 
     let _ = helios.close().await;
     Ok(())
@@ -2348,9 +2585,12 @@ async fn run_setup_pkg_cache(
     ssh_user: &str,
     publisher: crate::ops::pkg_cache::OmicronPublisher,
     tx: &mpsc::UnboundedSender<BuildEvent>,
+    build_log: &Path,
 ) -> Result<()> {
+    let log_path = build_log.to_path_buf();
+
     // Step: cache-start — Start Docker caching proxies on workstation
-    send(tx, BuildEvent::StepStarted("cache-start".into()));
+    audit_send(tx, &log_path, BuildEvent::StepStarted("cache-start".into())).await;
     send(
         tx,
         BuildEvent::StepDetail(
@@ -2389,10 +2629,20 @@ async fn run_setup_pkg_cache(
             ),
         ),
     );
-    send(tx, BuildEvent::StepCompleted("cache-start".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("cache-start".into()),
+    )
+    .await;
 
     // Step: cache-configure — Configure caches on Helios
-    send(tx, BuildEvent::StepStarted("cache-configure".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepStarted("cache-configure".into()),
+    )
+    .await;
 
     let helios_config = HostConfig {
         address: helios_ip.to_string(),
@@ -2526,7 +2776,12 @@ async fn run_setup_pkg_cache(
             ),
         ),
     );
-    send(tx, BuildEvent::StepCompleted("cache-configure".into()));
+    audit_send(
+        tx,
+        &log_path,
+        BuildEvent::StepCompleted("cache-configure".into()),
+    )
+    .await;
 
     Ok(())
 }
@@ -2539,4 +2794,69 @@ fn send(tx: &mpsc::UnboundedSender<BuildEvent>, event: BuildEvent) {
 fn is_ipv4(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
     parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok())
+}
+
+/// Append a single `BuildEvent` lifecycle line to the build log.
+/// `StepDetail` events return early — those are captured per-command by `LoggedSsh`.
+async fn log_event(path: &Path, event: &BuildEvent) {
+    let Some(line) = event.display_for_log() else {
+        return;
+    };
+    let Ok(mut f) = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+    else {
+        return;
+    };
+    let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
+    let entry = format!("[{timestamp}] [{:<16}] {line}\n", "Event");
+    let _ = f.write_all(entry.as_bytes()).await;
+}
+
+/// Log a `BuildEvent` to the build file then forward it to the TUI channel.
+async fn audit_send(tx: &mpsc::UnboundedSender<BuildEvent>, path: &Path, event: BuildEvent) {
+    log_event(path, &event).await;
+    let _ = tx.send(event);
+}
+
+/// Write the deployment metadata header at the start of a new build log file.
+/// Called before any SSH sessions open, so helios_ip/ssh_user are not yet
+/// known. The resolved address appears later as an [Event] HostDiscovered line.
+async fn write_deploy_header(path: &Path, deployment: &str, config: &DeploymentConfig) {
+    let Ok(mut f) = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+    else {
+        return;
+    };
+    let started_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %z");
+    let operator_host = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let pid = std::process::id();
+    let version = env!("CARGO_PKG_VERSION");
+    let omicron_ref = config.build.omicron.git_ref.as_deref().unwrap_or("master");
+    let zone_watchdog = config.build.tuning.zone_watchdog_enabled.unwrap_or(true);
+    let pre_format = config.build.tuning.pre_format_vdevs.unwrap_or(true);
+    let svcadm_autoclear = config.build.tuning.svcadm_autoclear.unwrap_or(false);
+    let header = format!(
+        "=== whoah deploy log ===\n\
+         deployment       = {deployment}\n\
+         operator_host    = {operator_host} (PID {pid})\n\
+         whoah_version    = {version}\n\
+         started_at       = {started_at}\n\
+         omicron_ref      = {omicron_ref}\n\
+         zone_watchdog    = {zone_watchdog}\n\
+         pre_format_vdevs = {pre_format}\n\
+         svcadm_autoclear = {svcadm_autoclear}\n\
+         =========================\n"
+    );
+    let _ = f.write_all(header.as_bytes()).await;
 }

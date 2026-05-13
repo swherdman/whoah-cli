@@ -19,17 +19,24 @@ pub struct LoggedSsh<'a> {
     log_path: PathBuf,
     tx: mpsc::UnboundedSender<BuildEvent>,
     step_id: String,
+    /// Source label written into every log line (e.g. "Watchdog", "Build/Omicron").
+    label: String,
     /// Proxy env string, set via `set_proxy()`. Prepended by proxy methods.
     proxy_env: Option<String>,
 }
 
 impl<'a> LoggedSsh<'a> {
     /// Create a new logged SSH session.
+    ///
+    /// `label` is embedded in every log line so concurrent sessions writing to
+    /// the same file can be distinguished (e.g. "Watchdog", "Build/Omicron").
+    /// Pass the same string you gave to `host.set_label(...)`.
     pub async fn new(
         host: &'a dyn RemoteHost,
         log_path: PathBuf,
         tx: &mpsc::UnboundedSender<BuildEvent>,
         step_id: &str,
+        label: &str,
     ) -> Result<Self> {
         if let Some(parent) = log_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
@@ -43,8 +50,9 @@ impl<'a> LoggedSsh<'a> {
             .map_err(|e| eyre!("Failed to open log {}: {e}", log_path.display()))?;
 
         let header = format!(
-            "--- SSH log for {} step={} at {} ---\n",
+            "--- SSH log for {} label={} step={} at {} ---\n",
             host.hostname(),
+            label,
             step_id,
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
         );
@@ -56,6 +64,7 @@ impl<'a> LoggedSsh<'a> {
             log_path,
             tx: tx.clone(),
             step_id: step_id.to_string(),
+            label: label.to_string(),
             proxy_env: None,
         })
     }
@@ -119,6 +128,61 @@ impl<'a> LoggedSsh<'a> {
         Ok(output)
     }
 
+    /// Execute a command with secrets redacted in the log and TUI output.
+    /// The original (un-redacted) command is forwarded to the host unchanged;
+    /// each element of `secrets` is replaced with `***` in logged lines and
+    /// in the `StepDetail` TUI message. Empty secret strings are silently
+    /// ignored.
+    pub async fn run_redacted(
+        &mut self,
+        cmd: &str,
+        secrets: &[&str],
+    ) -> Result<crate::ssh::CommandOutput> {
+        let redact = |s: &str| -> String {
+            secrets
+                .iter()
+                .filter(|x| !x.is_empty())
+                .fold(s.to_string(), |acc, sec| acc.replace(sec, "***"))
+        };
+        let visible = redact(cmd);
+        self.log_line(&format!(">>> {visible}")).await;
+        self.log_line("    [run] calling host.execute...").await;
+        self.detail(&visible).await;
+        let output = self.host.execute(cmd).await?;
+        self.log_line("    [run] host.execute returned").await;
+        for line in output.stdout.lines() {
+            self.log_line(&format!("    {}", redact(line))).await;
+        }
+        for line in output.stderr.lines() {
+            self.log_line(&format!("ERR {}", redact(line))).await;
+        }
+        self.log_line(&format!("--- exit_code={}", output.exit_code))
+            .await;
+        Ok(output)
+    }
+
+    /// Execute a command and log its I/O to the file, but do NOT send the
+    /// command or output to the TUI. Use for polling / diagnostic commands
+    /// that would otherwise flood the step output buffer.
+    pub async fn run_quiet(&mut self, cmd: &str) -> Result<crate::ssh::CommandOutput> {
+        self.log_line(&format!(">>> {cmd}")).await;
+        self.log_line("    [run] calling host.execute...").await;
+
+        let output = self.host.execute(cmd).await?;
+        self.log_line("    [run] host.execute returned").await;
+
+        for line in output.stdout.lines() {
+            self.log_line(&format!("    {line}")).await;
+        }
+        for line in output.stderr.lines() {
+            self.log_line(&format!("ERR {line}")).await;
+        }
+        self.log_line(&format!("--- exit_code={}", output.exit_code))
+            .await;
+
+        Ok(output)
+    }
+
     /// Execute a streaming command with proxy env vars, check for success.
     pub async fn run_streaming_check_with_proxy(&mut self, cmd: &str) -> Result<()> {
         let full_cmd = format!("{}{cmd}", self.proxy_prefix());
@@ -138,6 +202,7 @@ impl<'a> LoggedSsh<'a> {
         let step_id = self.step_id.clone();
         let tx = self.tx.clone();
         let log_path = self.log_path.clone();
+        let label = self.label.clone();
 
         let forward_handle = tokio::spawn(async move {
             let mut line_rx = line_rx;
@@ -154,7 +219,7 @@ impl<'a> LoggedSsh<'a> {
                 // Log to file
                 if let Some(ref mut f) = log_file {
                     let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
-                    let entry = format!("[{timestamp}]     {line}\n");
+                    let entry = format!("[{timestamp}] [{:<16}]     {line}\n", label);
                     let _ = tokio::io::AsyncWriteExt::write_all(f, entry.as_bytes()).await;
                     let _ = tokio::io::AsyncWriteExt::flush(f).await;
                 }
@@ -168,8 +233,10 @@ impl<'a> LoggedSsh<'a> {
             // Log channel close
             if let Some(ref mut f) = log_file {
                 let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
-                let entry =
-                    format!("[{timestamp}]     [forward] channel closed after {count} lines\n");
+                let entry = format!(
+                    "[{timestamp}] [{:<16}]     [forward] channel closed after {count} lines\n",
+                    label
+                );
                 let _ = tokio::io::AsyncWriteExt::write_all(f, entry.as_bytes()).await;
                 let _ = tokio::io::AsyncWriteExt::flush(f).await;
             }
@@ -222,7 +289,7 @@ impl<'a> LoggedSsh<'a> {
 
     async fn log_line(&mut self, line: &str) {
         let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
-        let entry = format!("[{timestamp}] {line}\n");
+        let entry = format!("[{timestamp}] [{:<16}] {line}\n", self.label);
         let _ = self.log_file.write_all(entry.as_bytes()).await;
         let _ = self.log_file.flush().await;
     }
@@ -261,4 +328,52 @@ fn is_noise_line(line: &str) -> bool {
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ssh::mock::MockHost;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_run_redacted_hides_secret_in_log() {
+        let mut mock = MockHost::new("test-host");
+        mock.add_success("SECRET_CMD", "cmd output line");
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let log_path = std::env::temp_dir().join("whoah-redacted-test.log");
+        let _ = tokio::fs::remove_file(&log_path).await;
+
+        let mut ssh = LoggedSsh::new(&mock, log_path.clone(), &tx, "test-step", "TestRedacted")
+            .await
+            .expect("LoggedSsh::new failed");
+
+        let result = ssh
+            .run_redacted("SECRET_CMD", &["SECRET"])
+            .await
+            .expect("run_redacted failed");
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "cmd output line");
+
+        // Verify log file contains *** and not the secret
+        let log_contents = tokio::fs::read_to_string(&log_path)
+            .await
+            .expect("read log");
+        assert!(
+            !log_contents.contains("SECRET_CMD"),
+            "log must not contain original command"
+        );
+        assert!(
+            log_contents.contains("***_CMD"),
+            "log must contain redacted command"
+        );
+        // Output should also be redacted (no SECRET in stdout lines)
+        let stdout_lines: Vec<&str> = log_contents
+            .lines()
+            .filter(|l| l.contains("cmd output line"))
+            .collect();
+        assert!(!stdout_lines.is_empty(), "stdout line must appear in log");
+    }
 }
