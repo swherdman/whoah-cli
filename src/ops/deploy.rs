@@ -1805,6 +1805,194 @@ print('Updated vdevs to {vdev_count}')
 
     send(tx, BuildEvent::StepCompleted("deploy-vhw".into()));
 
+    // --- Step: Pre-format synthetic vdevs (sequential zpool create) ---
+    // Eliminates the ~20 min switch-zone init delay caused by sled-agent
+    // issuing all zpool-create calls concurrently at startup (see
+    // docs/TROUBLESHOOTING-zone-convergence.md, Root Cause 2).
+    if config.build.tuning.pre_format_vdevs.unwrap_or(true) {
+        send(tx, BuildEvent::StepStarted("deploy-preformat".into()));
+        ssh.set_step("deploy-preformat");
+        ssh.detail("Pre-formatting synthetic vdevs sequentially...").await;
+
+        let vdev_dir = config
+            .build
+            .tuning
+            .vdev_dir
+            .as_deref()
+            .unwrap_or("/var/tmp");
+
+        // Read the vdev list from the remote config.toml we wrote earlier.
+        let vdev_list_out = ssh
+            .run_check(&format!(
+                r#"python3 -c "
+import re
+c = open('{sled_config_path}').read()
+m = re.search(r'vdevs\s*=\s*\[(.*?)\]', c, re.DOTALL)
+if not m:
+    raise SystemExit('vdevs key not found in config.toml')
+for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
+    print(v)
+""#
+            ))
+            .await
+            .inspect_err(|e| {
+                send(
+                    tx,
+                    BuildEvent::StepFailed(
+                        "deploy-preformat".into(),
+                        format!("Failed to read vdev list: {e}"),
+                    ),
+                );
+            })?;
+
+        let vdevs: Vec<&str> = vdev_list_out
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+
+        if vdevs.is_empty() {
+            let msg = "No vdevs found in remote config.toml".to_string();
+            send(tx, BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()));
+            return Err(eyre!(msg));
+        }
+
+        let total = vdevs.len();
+        ssh.detail(&format!("Found {total} vdev(s) to pre-format")).await;
+
+        for (idx, filename) in vdevs.iter().enumerate() {
+            let n = idx + 1;
+
+            // Resolve path: absolute as-is, else join with vdev_dir
+            let path = if filename.starts_with('/') {
+                filename.to_string()
+            } else {
+                format!("{vdev_dir}/{filename}")
+            };
+
+            // Determine zpool name prefix by vdev type
+            let prefix = if filename.starts_with("m2_") {
+                "oxi_"
+            } else if filename.starts_with("u2_") {
+                "oxp_"
+            } else {
+                let msg = format!("Unknown vdev prefix for '{filename}' — expected m2_ or u2_");
+                send(tx, BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()));
+                return Err(eyre!(msg));
+            };
+
+            // Fail loudly if the backing file is missing (deploy-vhw should have created it)
+            ssh.run_check(&format!("test -f \"{path}\""))
+                .await
+                .map_err(|_| {
+                    let msg = format!("Vdev backing file missing: {path}");
+                    send(tx, BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()));
+                    eyre!(msg)
+                })?;
+
+            // Detect whether a pool already exists on this vdev (idempotent retry path).
+            // Uses fstyp -a — the same mechanism sled-agent uses (Fstyp::get_zpool).
+            let fstyp = ssh
+                .run(&format!(
+                    "pfexec /usr/sbin/fstyp -a \"{path}\" 2>/dev/null || true"
+                ))
+                .await?;
+
+            // Extract pool name from fstyp output: looks for "    name: '<poolname>'"
+            // Use trim_matches('\'') like sled-agent's Fstyp parser to tolerate any
+            // trailing whitespace that might survive the line trim.
+            let existing_pool: Option<String> = fstyp.stdout.lines().find_map(|line| {
+                let trimmed = line.trim();
+                let rest = trimmed.strip_prefix("name: ")?;
+                let name = rest.trim_matches('\'');
+                if !name.is_empty() && name.starts_with(prefix) {
+                    Some(name.to_string())
+                } else {
+                    None
+                }
+            });
+
+            if let Some(pool_name) = existing_pool {
+                ssh.detail(&format!(
+                    "[{n}/{total}] {filename}: pool {pool_name} already exists — ensuring exported"
+                ))
+                .await;
+                // Re-apply encryption feature unconditionally (handles partial-failure recovery)
+                let _ = ssh
+                    .run(&format!(
+                        "pfexec zpool set feature@encryption=enabled {pool_name} 2>/dev/null || true"
+                    ))
+                    .await;
+                let _ = ssh
+                    .run(&format!(
+                        "pfexec zpool export {pool_name} 2>/dev/null || true"
+                    ))
+                    .await;
+            } else {
+                // Generate UUID and create the pool
+                let uuid_out = ssh.run_check("uuidgen").await.inspect_err(|e| {
+                    send(
+                        tx,
+                        BuildEvent::StepFailed(
+                            "deploy-preformat".into(),
+                            format!("uuidgen failed: {e}"),
+                        ),
+                    );
+                })?;
+                let uuid = uuid_out.stdout.trim().to_string();
+                let pool_name = format!("{prefix}{uuid}");
+
+                ssh.detail(&format!(
+                    "[{n}/{total}] {filename}: zpool create {pool_name}"
+                ))
+                .await;
+
+                ssh.run_check(&format!(
+                    "pfexec zpool create -o ashift=12 {pool_name} \"{path}\""
+                ))
+                .await
+                .inspect_err(|e| {
+                    send(
+                        tx,
+                        BuildEvent::StepFailed(
+                            "deploy-preformat".into(),
+                            format!("zpool create failed for {filename}: {e}"),
+                        ),
+                    );
+                })?;
+
+                ssh.run_check(&format!(
+                    "pfexec zpool set feature@encryption=enabled {pool_name}"
+                ))
+                .await
+                .inspect_err(|e| {
+                    send(
+                        tx,
+                        BuildEvent::StepFailed(
+                            "deploy-preformat".into(),
+                            format!("zpool set encryption feature failed for {pool_name}: {e}"),
+                        ),
+                    );
+                })?;
+
+                ssh.run_check(&format!("pfexec zpool export {pool_name}"))
+                    .await
+                    .inspect_err(|e| {
+                        send(
+                            tx,
+                            BuildEvent::StepFailed(
+                                "deploy-preformat".into(),
+                                format!("zpool export failed for {pool_name}: {e}"),
+                            ),
+                        );
+                    })?;
+            }
+        }
+
+        send(tx, BuildEvent::StepCompleted("deploy-preformat".into()));
+    }
+
     // --- Step: Install omicron ---
     send(tx, BuildEvent::StepStarted("deploy-install".into()));
     ssh.set_step("deploy-install");

@@ -90,9 +90,14 @@ pub fn update_deployment_field(
                 .ok_or_else(|| eyre!("Expected '{part}' to be a table"))?;
         }
 
-        // Preserve type: integer fields stay integer, array fields stay array
+        // Preserve type: integer/bool/array fields keep their TOML type.
+        // For absent fields (None existing), treat unambiguous "true"/"false" input
+        // as bool so new Optional<bool> fields round-trip correctly.
         let existing = table.get(field_name);
         let is_int = existing.map(|v| v.is_integer()).unwrap_or(false);
+        let is_bool = existing.map(|v| v.is_bool()).unwrap_or_else(|| {
+            existing.is_none() && (value == "true" || value == "false")
+        });
         let is_array = existing.map(|v| v.is_array()).unwrap_or(false);
 
         if is_int {
@@ -100,6 +105,11 @@ pub fn update_deployment_field(
                 .parse()
                 .map_err(|_| eyre!("'{field_name}' must be a number, got '{value}'"))?;
             table.insert(field_name, toml_edit::value(int_val));
+        } else if is_bool {
+            let bool_val: bool = value
+                .parse()
+                .map_err(|_| eyre!("'{field_name}' must be true/false, got '{value}'"))?;
+            table.insert(field_name, toml_edit::value(bool_val));
         } else if is_array {
             // Split comma-separated input into a TOML array of strings
             let mut arr = toml_edit::Array::new();
@@ -154,13 +164,19 @@ pub fn update_deployment_field(
                 .ok_or_else(|| eyre!("'{part}' is not an inline table"))?;
         }
 
-        // Preserve integer type — reject non-numeric input for integer fields
+        // Preserve type for integer and bool fields
         let is_int = it.get(field_name).map(|v| v.is_integer()).unwrap_or(false);
+        let is_bool = it.get(field_name).map(|v| v.is_bool()).unwrap_or(false);
         if is_int {
             let int_val: i64 = value
                 .parse()
                 .map_err(|_| eyre!("'{field_name}' must be a number, got '{value}'"))?;
             it.insert(field_name, toml_edit::Value::from(int_val));
+        } else if is_bool {
+            let bool_val: bool = value
+                .parse()
+                .map_err(|_| eyre!("'{field_name}' must be true/false, got '{value}'"))?;
+            it.insert(field_name, toml_edit::Value::from(bool_val));
         } else {
             it.insert(field_name, toml_edit::Value::from(value));
         }

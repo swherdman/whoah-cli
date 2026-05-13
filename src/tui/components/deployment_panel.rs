@@ -987,6 +987,15 @@ impl DeploymentPanel {
             "build",
             "tuning.swap_device_size_gb",
         );
+        push_editable(
+            &mut build_tab,
+            "pre_format_vdevs",
+            &t.pre_format_vdevs
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "true".into()),
+            "build",
+            "tuning.pre_format_vdevs",
+        );
 
         self.tab_lines = [host_tab, network_tab, build_tab, nexus_tab, monitoring_tab];
     }

@@ -534,6 +534,12 @@ pub struct TuningConfig {
     /// Swap device size in GB for sled-agent config (default: 64)
     #[serde(default)]
     pub swap_device_size_gb: Option<u32>,
+    /// Pre-format synthetic vdevs sequentially before starting sled-agent.
+    /// Eliminates the I/O burst from concurrent zpool create at sled-agent
+    /// startup which causes the switch-zone ~20 min init delay.
+    /// Default: true.
+    #[serde(default)]
+    pub pre_format_vdevs: Option<bool>,
 }
 
 // --- state.toml (per-deployment runtime state) ---
