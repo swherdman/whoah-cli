@@ -2040,7 +2040,18 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
     send(tx, BuildEvent::StepStarted("deploy-verify".into()));
     ssh.set_step("deploy-verify");
 
-    let watchdog_handle = if config.build.tuning.zone_watchdog_enabled.unwrap_or(true) {
+    // AbortOnDrop ensures the watchdog is cancelled on any exit path from this
+    // function, including early returns via `?`.
+    struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+    impl Drop for AbortOnDrop {
+        fn drop(&mut self) {
+            if let Some(h) = self.0.take() {
+                h.abort();
+            }
+        }
+    }
+
+    let _watchdog = AbortOnDrop(if config.build.tuning.zone_watchdog_enabled.unwrap_or(true) {
         let wd_cfg = helios_config.clone();
         let wd_tx = tx.clone();
         Some(tokio::spawn(async move {
@@ -2048,7 +2059,7 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         }))
     } else {
         None
-    };
+    });
 
     let expected_zones = crate::config::derive_expected_zones(overrides);
     let expected_total: u32 = expected_zones.values().sum();
@@ -2185,9 +2196,6 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
-    if let Some(h) = watchdog_handle {
-        h.abort();
-    }
     send(tx, BuildEvent::StepCompleted("deploy-verify".into()));
 
     // Resolve nexus_ip for config steps — must come from DNS

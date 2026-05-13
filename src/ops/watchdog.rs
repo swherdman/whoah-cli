@@ -101,6 +101,17 @@ pub async fn run_zone_watchdog(
 
         for rule in BUILTIN_RULES {
             for zone in running.iter().filter(|z: &&String| z.contains(rule.zone_substring)) {
+                // Validate zone name before embedding in shell commands. Illumos zone
+                // names are restricted to [a-zA-Z0-9_-.] — anything else is unexpected
+                // and could break the single-quoted zlogin invocation.
+                if !zone_name_is_safe(zone) {
+                    let _ = tx.send(BuildEvent::StepDetail(
+                        "deploy-verify".into(),
+                        format!("watchdog [{}]: skipping zone with unexpected name: {zone:?}", rule.name),
+                    ));
+                    continue;
+                }
+
                 // --- 1. on_appear (one-shot per zone) ---
                 let appear_key = (rule.name, zone.clone());
                 if !on_appear_done.contains(&appear_key) {
@@ -151,14 +162,17 @@ pub async fn run_zone_watchdog(
                         .unwrap_or_default();
 
                     match state.as_str() {
-                        "maintenance" => {
+                        // "offline*" is the compound offline+maintenance state that
+                        // svcs -H -o state reports when a service is offline waiting
+                        // on a dependency that is in maintenance.
+                        "maintenance" | "offline*" => {
                             let clear_cmd =
                                 format!("pfexec zlogin {zone} 'svcadm clear {fmri}'");
                             let _ = host.execute(&clear_cmd).await;
                             let _ = tx.send(BuildEvent::StepDetail(
                                 "deploy-verify".into(),
                                 format!(
-                                    "watchdog [{}]: cleared {fmri} in {zone} (was in maintenance)",
+                                    "watchdog [{}]: cleared {fmri} in {zone} (was {state})",
                                     rule.name
                                 ),
                             ));
@@ -197,9 +211,23 @@ pub async fn run_zone_watchdog(
     }
 }
 
+fn zone_name_is_safe(name: &str) -> bool {
+    !name.chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '-' | '.'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zone_name_validation_rejects_unsafe_chars() {
+        assert!(!zone_name_is_safe("oxz_ntp'0"));
+        assert!(!zone_name_is_safe("zone name"));
+        assert!(!zone_name_is_safe("zone;rm -rf /"));
+        assert!(zone_name_is_safe("oxz_ntp_1a2b3c4d"));
+        assert!(zone_name_is_safe("oxz_switch_00000001"));
+        assert!(zone_name_is_safe("zone-name.test"));
+    }
 
     #[test]
     fn builtin_rules_no_single_quotes_in_commands() {
