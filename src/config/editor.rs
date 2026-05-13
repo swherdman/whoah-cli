@@ -95,9 +95,9 @@ pub fn update_deployment_field(
         // as bool so new Optional<bool> fields round-trip correctly.
         let existing = table.get(field_name);
         let is_int = existing.map(|v| v.is_integer()).unwrap_or(false);
-        let is_bool = existing.map(|v| v.is_bool()).unwrap_or_else(|| {
-            existing.is_none() && (value == "true" || value == "false")
-        });
+        let is_bool = existing
+            .map(|v| v.is_bool())
+            .unwrap_or_else(|| existing.is_none() && (value == "true" || value == "false"));
         let is_array = existing.map(|v| v.is_array()).unwrap_or(false);
 
         if is_int {

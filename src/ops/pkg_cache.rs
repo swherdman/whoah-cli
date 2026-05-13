@@ -37,11 +37,17 @@ pub struct OmicronPublisher {
 const KNOWN_PUBLISHERS: &[(&str, OmicronPublisher)] = &[
     (
         "helios-dev",
-        OmicronPublisher { name: "helios-dev", catalog_path: "helios/2/dev/" },
+        OmicronPublisher {
+            name: "helios-dev",
+            catalog_path: "helios/2/dev/",
+        },
     ),
     (
         "helios",
-        OmicronPublisher { name: "helios", catalog_path: "helios/3/dev/" },
+        OmicronPublisher {
+            name: "helios",
+            catalog_path: "helios/3/dev/",
+        },
     ),
 ];
 
@@ -131,7 +137,10 @@ pub async fn ensure_caches(publisher: OmicronPublisher) -> Result<CacheInfo> {
     // Detect LAN IP after containers are running so we can test port reachability
     let lan_ip = detect_lan_ip().await?;
 
-    let publisher_url = format!("http://{}:{}/{}", lan_ip, NGINX_PORT, publisher.catalog_path);
+    let publisher_url = format!(
+        "http://{}:{}/{}",
+        lan_ip, NGINX_PORT, publisher.catalog_path
+    );
     let https_proxy_url = format!("http://{}:{}", lan_ip, SQUID_PORT);
 
     Ok(CacheInfo {

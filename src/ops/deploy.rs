@@ -126,25 +126,32 @@ pub async fn run_deploy(
 
     // Resolve which IPS publisher this omicron commit uses before starting the cache.
     // This must happen before cache-start so ensure_caches can compute the right URL.
-    let publisher = crate::ops::pkg_cache::resolve_omicron_publisher(
-        config.build.omicron.git_ref.as_deref(),
-    )
-    .await
-    .inspect_err(|e| {
-        send(
-            &tx,
-            BuildEvent::StepFailed(
-                "cache-start".into(),
-                format!("Failed to detect omicron publisher: {e}"),
-            ),
-        );
-    })?;
+    let publisher =
+        crate::ops::pkg_cache::resolve_omicron_publisher(config.build.omicron.git_ref.as_deref())
+            .await
+            .inspect_err(|e| {
+                send(
+                    &tx,
+                    BuildEvent::StepFailed(
+                        "cache-start".into(),
+                        format!("Failed to detect omicron publisher: {e}"),
+                    ),
+                );
+            })?;
 
     // Phase 4: Cache Setup
     run_setup_pkg_cache(&helios_ip, &ssh_user, publisher.clone(), &tx).await?;
 
     // Phase 5: OS Setup
-    run_os_setup(&helios_ip, &ssh_user, publisher.clone(), &config, &tx, &build_log).await?;
+    run_os_setup(
+        &helios_ip,
+        &ssh_user,
+        publisher.clone(),
+        &config,
+        &tx,
+        &build_log,
+    )
+    .await?;
 
     // Phase 6-8: Build, Deploy, Configure
     run_omicron_build(&helios_ip, &ssh_user, publisher, &config, &tx, &build_log).await?;
@@ -1016,12 +1023,7 @@ async fn run_os_setup(
             send(tx, BuildEvent::StepCompleted("os-reboot".into()));
 
             return continue_os_setup_after_reboot(
-                helios_ip,
-                ssh_user,
-                publisher,
-                config,
-                tx,
-                &log_path,
+                helios_ip, ssh_user, publisher, config, tx, &log_path,
             )
             .await;
         }
@@ -1298,7 +1300,8 @@ async fn run_omicron_build(
     )).await?;
     ssh.run_check(&format!(
         r#"sed -i 's|ip_net = "192\.168\.[0-9]*\.[0-9]*/24"|ip_net = "{infra_ip}/24"|' {rss_path}"#
-    )).await?;
+    ))
+    .await?;
     ssh.run_check(&format!(
         r#"sed -i 's/nexthop = "192\.168\.[0-9]*\.[0-9]*"/nexthop = "{gateway}"/' {rss_path}"#
     ))
@@ -1827,7 +1830,8 @@ print('Updated vdevs to {vdev_count}')
     if config.build.tuning.pre_format_vdevs.unwrap_or(true) {
         send(tx, BuildEvent::StepStarted("deploy-preformat".into()));
         ssh.set_step("deploy-preformat");
-        ssh.detail("Pre-formatting synthetic vdevs sequentially...").await;
+        ssh.detail("Pre-formatting synthetic vdevs sequentially...")
+            .await;
 
         let vdev_dir = config
             .build
@@ -1869,12 +1873,16 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
 
         if vdevs.is_empty() {
             let msg = "No vdevs found in remote config.toml".to_string();
-            send(tx, BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()));
+            send(
+                tx,
+                BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()),
+            );
             return Err(eyre!(msg));
         }
 
         let total = vdevs.len();
-        ssh.detail(&format!("Found {total} vdev(s) to pre-format")).await;
+        ssh.detail(&format!("Found {total} vdev(s) to pre-format"))
+            .await;
 
         for (idx, filename) in vdevs.iter().enumerate() {
             let n = idx + 1;
@@ -1893,7 +1901,10 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
                 "oxp_"
             } else {
                 let msg = format!("Unknown vdev prefix for '{filename}' — expected m2_ or u2_");
-                send(tx, BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()));
+                send(
+                    tx,
+                    BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()),
+                );
                 return Err(eyre!(msg));
             };
 
@@ -1902,7 +1913,10 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
                 .await
                 .map_err(|_| {
                     let msg = format!("Vdev backing file missing: {path}");
-                    send(tx, BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()));
+                    send(
+                        tx,
+                        BuildEvent::StepFailed("deploy-preformat".into(), msg.clone()),
+                    );
                     eyre!(msg)
                 })?;
 
