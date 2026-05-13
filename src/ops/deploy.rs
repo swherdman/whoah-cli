@@ -2040,6 +2040,16 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
     send(tx, BuildEvent::StepStarted("deploy-verify".into()));
     ssh.set_step("deploy-verify");
 
+    let watchdog_handle = if config.build.tuning.zone_watchdog_enabled.unwrap_or(true) {
+        let wd_cfg = helios_config.clone();
+        let wd_tx = tx.clone();
+        Some(tokio::spawn(async move {
+            crate::ops::watchdog::run_zone_watchdog(wd_cfg, wd_tx).await;
+        }))
+    } else {
+        None
+    };
+
     let expected_zones = crate::config::derive_expected_zones(overrides);
     let expected_total: u32 = expected_zones.values().sum();
     let expected_running = expected_total + 2; // +2 for global + sidecar
@@ -2175,6 +2185,9 @@ for v in re.findall(r'\"([^\"]+\.vdev)\"', m.group(1)):
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
+    if let Some(h) = watchdog_handle {
+        h.abort();
+    }
     send(tx, BuildEvent::StepCompleted("deploy-verify".into()));
 
     // Resolve nexus_ip for config steps — must come from DNS

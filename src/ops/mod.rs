@@ -1,4 +1,5 @@
 pub mod demo;
+pub mod watchdog;
 pub mod deploy;
 pub mod discover;
 pub mod hypervisor_proxmox_validate;

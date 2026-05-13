@@ -530,6 +530,11 @@ pub struct TuningConfig {
     /// Default: true.
     #[serde(default)]
     pub pre_format_vdevs: Option<bool>,
+    /// Run the zone-recovery watchdog during deploy-verify. Monitors known
+    /// zones and auto-recovers SMF services that get stuck (e.g. NTP zone
+    /// ndp/ipmgmtd issues). Default: true.
+    #[serde(default)]
+    pub zone_watchdog_enabled: Option<bool>,
 }
 
 // --- state.toml (per-deployment runtime state) ---

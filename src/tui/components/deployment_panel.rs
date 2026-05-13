@@ -996,6 +996,15 @@ impl DeploymentPanel {
             "build",
             "tuning.pre_format_vdevs",
         );
+        push_editable(
+            &mut build_tab,
+            "zone_watchdog_enabled",
+            &t.zone_watchdog_enabled
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "true".into()),
+            "build",
+            "tuning.zone_watchdog_enabled",
+        );
 
         self.tab_lines = [host_tab, network_tab, build_tab, nexus_tab, monitoring_tab];
     }
