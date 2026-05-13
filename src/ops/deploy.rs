@@ -1477,9 +1477,16 @@ print('Updated vdevs to {vdev_count}')
     // /opt/ooce/bin:/opt/ooce/sbin are added explicitly: on a fresh VM the ooce profile.d entry
     // doesn't exist yet (it's created when ooce packages are first installed), so pg_config
     // wouldn't be found otherwise. Established VMs got these paths via profile.d automatically.
-    ssh.run_streaming_check_with_proxy(&format!(
+    // Proxy vars are exported inside bash -c and also threaded through pfexec env so the elevated
+    // subprocess inherits them (pfexec strips the caller's environment by default).
+    let proxy = &cache_info.https_proxy_url;
+    ssh.run_streaming_check(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         export https_proxy={proxy} HTTPS_PROXY={proxy} \
+                SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} && \
          pfexec env PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin \
+                https_proxy={proxy} HTTPS_PROXY={proxy} \
+                SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} \
          ./tools/install_builder_prerequisites.sh -y' 2>&1"
     ))
     .await
@@ -1501,9 +1508,13 @@ print('Updated vdevs to {vdev_count}')
     ssh.detail("Installing runner prerequisites...").await;
 
     // Use proxy — the script may download prebuilt artifacts via HTTPS
-    ssh.run_streaming_check_with_proxy(&format!(
+    ssh.run_streaming_check(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
+         export https_proxy={proxy} HTTPS_PROXY={proxy} \
+                SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} && \
          pfexec env PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin \
+                https_proxy={proxy} HTTPS_PROXY={proxy} \
+                SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} \
          ./tools/install_runner_prerequisites.sh -y' 2>&1"
     ))
     .await
@@ -1570,9 +1581,11 @@ print('Updated vdevs to {vdev_count}')
 
     // Use proxy — cargo downloads crates from crates.io/github via HTTPS.
     // ooce paths needed: pq-sys build script calls pg_config to set DEP_PQ_LIBDIRS.
-    ssh.run_streaming_check_with_proxy(&format!(
+    ssh.run_streaming_check(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
          export PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin && \
+         export https_proxy={proxy} HTTPS_PROXY={proxy} \
+                SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} && \
          cargo build --release --bin omicron-package' 2>&1"
     ))
     .await
@@ -1636,11 +1649,13 @@ print('Updated vdevs to {vdev_count}')
         }
     });
 
-    // Use proxy — omicron-package downloads prebuilt binaries from buildomat via HTTPS
-    // reqwest respects https_proxy + SSL_CERT_FILE env vars
-    ssh.run_streaming_check_with_proxy(&format!(
+    // Use proxy — omicron-package downloads prebuilt binaries from buildomat via HTTPS.
+    // reqwest respects https_proxy + SSL_CERT_FILE env vars.
+    ssh.run_streaming_check(&format!(
         "cd {repo_path} && bash -c '. ~/.cargo/env && source env.sh && \
          export PATH=$PATH:/opt/ooce/bin:/opt/ooce/sbin && \
+         export https_proxy={proxy} HTTPS_PROXY={proxy} \
+                SSL_CERT_FILE={ca_path} REQUESTS_CA_BUNDLE={ca_path} && \
          ./target/release/omicron-package package' 2>&1"
     ))
     .await
