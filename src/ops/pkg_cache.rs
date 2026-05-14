@@ -226,6 +226,22 @@ pub async fn install_ca_cert(host: &dyn crate::ssh::RemoteHost, _lan_ip: &str) -
         ));
     }
 
+    // Add to the system OpenSSL trust store (/etc/ssl/certs/ is the hashed CA dir
+    // that pkg(7) and other tools using OpenSSL default verification will consult).
+    // Without this, pkg(7) rejects the proxy's SSL-bumped cert because it only checks
+    // the system trust store — it ignores SSL_CERT_FILE env var unlike curl.
+    let trust_cmd = format!(
+        "pfexec cp {remote_cert_path} /etc/ssl/certs/whoah-cache-ca.pem && \
+         pfexec openssl rehash /etc/ssl/certs/"
+    );
+    let trust_out = host.execute(&trust_cmd).await?;
+    if trust_out.exit_code != 0 {
+        return Err(eyre!(
+            "Failed to add CA cert to system trust store: {}",
+            trust_out.stderr.trim()
+        ));
+    }
+
     Ok(remote_cert_path.to_string())
 }
 

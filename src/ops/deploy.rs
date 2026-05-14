@@ -1122,12 +1122,49 @@ async fn continue_os_setup_after_reboot(
     // Re-set pkg publisher and HTTPS proxy (new BE has original publisher)
     ssh.detail("Re-setting caches after reboot...").await;
     let cache_info = crate::ops::pkg_cache::ensure_caches(publisher.clone()).await?;
-    let _ = crate::ops::pkg_cache::set_publisher(
-        &helios,
-        &cache_info.publisher_url,
-        cache_info.publisher.name,
-    )
-    .await;
+
+    // Retry set_publisher a few times: the VM just rebooted and the TCP route to the
+    // nginx host (192.168.2.150) can take a couple seconds to stabilise even though
+    // SSH itself is already up. pkg set-publisher validates the origin URL, so a
+    // transient connectivity blip causes it to fail — silently previously, which left
+    // the helios publisher pointing at https://pkg.oxide.computer for the rest of the
+    // build, causing pkg calls with https_proxy to fail on the Squid SSL cert.
+    let mut publisher_set = false;
+    for attempt in 1..=3u32 {
+        match crate::ops::pkg_cache::set_publisher(
+            &helios,
+            &cache_info.publisher_url,
+            cache_info.publisher.name,
+        )
+        .await
+        {
+            Ok(()) => {
+                publisher_set = true;
+                break;
+            }
+            Err(e) if attempt < 3 => {
+                ssh.detail(&format!(
+                    "set_publisher attempt {attempt} failed ({e}), retrying..."
+                ))
+                .await;
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+            Err(e) => {
+                ssh.detail(&format!(
+                    "Warning: set_publisher failed after 3 attempts ({e}); \
+                     pkg calls with https_proxy will use pkg.oxide.computer directly"
+                ))
+                .await;
+            }
+        }
+    }
+    if publisher_set {
+        ssh.detail(&format!(
+            "pkg publisher '{}' → {}",
+            cache_info.publisher.name, cache_info.publisher_url
+        ))
+        .await;
+    }
 
     // Install CA cert and set proxy for HTTPS downloads
     let ca_path = crate::ops::pkg_cache::install_ca_cert(&helios, &cache_info.lan_ip)
