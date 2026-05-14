@@ -236,6 +236,7 @@ impl BuildView {
         }
 
         let total_lines = lines.len();
+        frame.render_widget(ratatui::widgets::Clear, area);
         frame.render_widget(Paragraph::new(lines).scroll((self.scroll, 0)), area);
 
         // Scrollbar: accent color when step list is focused
@@ -368,6 +369,7 @@ impl BuildView {
             .style(Style::default().bg(p.bg_panel));
 
         let log_inner = block.inner(area);
+        frame.render_widget(ratatui::widgets::Clear, area);
         frame.render_widget(block, area);
 
         // If no step to display

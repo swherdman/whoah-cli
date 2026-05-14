@@ -934,8 +934,9 @@ impl App {
                 };
 
                 // Update step detail: use parsed summary if available,
-                // otherwise use the raw detail
-                let display = summary.unwrap_or_else(|| detail.clone());
+                // otherwise use the raw detail (stripped of ANSI/control chars)
+                let display =
+                    summary.unwrap_or_else(|| crate::ops::pipeline::strip_control(detail.clone()));
                 if let Some(step) = self.pipeline.step_mut(id)
                     && let crate::ops::pipeline::StepStatus::Running { started, .. } = step.status
                 {

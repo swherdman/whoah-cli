@@ -34,6 +34,40 @@ impl StepStatus {
     }
 }
 
+// ── Helpers ─────────────────────────────────────────────────────
+
+/// Strip ANSI CSI escape sequences and bare control characters from a string.
+///
+/// Streaming SSH output (cargo build, pkg install, etc.) often contains ANSI
+/// color codes and carriage returns. Storing them raw and rendering via ratatui
+/// Span sends the ESC byte to the terminal, which interprets it as an escape
+/// sequence and may move the cursor or erase lines — changes ratatui cannot
+/// track, permanently breaking its buffer diff model for those cells.
+pub(crate) fn strip_control(s: String) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x1b' => {
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                } else {
+                    chars.next();
+                }
+            }
+            '\r' => {}
+            c if c.is_control() && c != '\t' => {}
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 // ── Step ────────────────────────────────────────────────────────
 
 /// Maximum number of output lines to retain per step for the log panel.
@@ -63,7 +97,7 @@ impl Step {
         if self.output.len() >= STEP_OUTPUT_CAPACITY {
             self.output.remove(0);
         }
-        self.output.push(line);
+        self.output.push(strip_control(line));
     }
 
     pub fn elapsed(&self) -> Option<Duration> {
