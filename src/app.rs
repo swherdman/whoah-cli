@@ -168,11 +168,9 @@ impl App {
         self.spawn_prereq_checks();
 
         if !self.demo && !self.deployment_name.is_empty() {
-            // Connect to host
-            self.connect().await;
-
-            // Initial status poll
-            self.spawn_status_poll();
+            // Connect in background — TUI renders immediately showing "connecting..."
+            // AppEvent::Connected fires when ready and triggers the first status poll
+            self.spawn_connect();
         } else if self.demo {
             // Populate Monitor screen with fake status data
             if let Some(tx) = &self.app_event_tx {
@@ -222,35 +220,6 @@ impl App {
 
         tui.exit()?;
         Ok(())
-    }
-
-    async fn connect(&mut self) {
-        let host_config = match self.config.deployment.hosts.values().next() {
-            Some(h) => h.clone(),
-            None => {
-                tracing::error!("No hosts configured");
-                return;
-            }
-        };
-
-        tracing::info!(
-            "Connecting to {}@{}...",
-            host_config.ssh_user,
-            host_config.address
-        );
-
-        match SshHost::connect(&host_config).await {
-            Ok(host) => {
-                self.status_bar.set_connected(&host_config.address);
-                tracing::info!("Connected to {}", host_config.address);
-                self.host = Some(Arc::new(host));
-            }
-            Err(e) => {
-                tracing::error!("Connection failed: {e}");
-                self.alert_bar
-                    .set_alert(Severity::Critical, format!("SSH connection failed: {e}"));
-            }
-        }
     }
 
     fn spawn_connect(&mut self) {
